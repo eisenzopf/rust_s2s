@@ -29,6 +29,7 @@ use std::path::Path;
 
 use s2s_kernels::reference::embedding::{embedding_sum_fwd, NO_TOKEN};
 
+use super::accel::LmAccelerator;
 use super::conditioner::{Condition, ConditionProvider};
 use super::config::{DepFormerConfig, LmConfig};
 use super::error::{Error, Result};
@@ -66,15 +67,36 @@ pub struct NameCheck {
     pub unused: Vec<String>,
 }
 
+/// One depformer slice. `linear_in`, `layers` and `linear_out` are only
+/// loaded for CPU compute (with an accelerator they are `None` / empty).
 #[derive(Clone, Debug)]
 struct DepSlice {
-    linear_in: Linear,
+    linear_in: Option<Linear>,
     emb: Vec<f32>,
     emb_dim: usize,
     emb_vocab: usize,
     low_rank: Option<Linear>,
     layers: Vec<Layer>,
-    linear_out: Linear,
+    linear_out: Option<Linear>,
+}
+
+impl DepSlice {
+    /// Embedding of the previous token for this slice (`None`: no token).
+    fn embed(&self, s: usize, token: Option<u32>) -> Result<Option<Vec<f32>>> {
+        let Some(t) = token else { return Ok(None) };
+        let t = t as usize;
+        if t >= self.emb_vocab {
+            return Err(Error::Input(format!(
+                "depformer slice {s}: token {t} out of range (vocab {})",
+                self.emb_vocab
+            )));
+        }
+        let row = &self.emb[t * self.emb_dim..(t + 1) * self.emb_dim];
+        Ok(Some(match &self.low_rank {
+            None => row.to_vec(),
+            Some(lr) => lr.forward(row),
+        }))
+    }
 }
 
 /// The depth transformer. Kyutai gives each slice its own transformer and
@@ -89,7 +111,7 @@ struct DepFormer {
 }
 
 impl DepFormer {
-    fn load(l: &mut Loader, cfg: &LmConfig, dcfg: &DepFormerConfig) -> Result<Self> {
+    fn load(l: &mut Loader, cfg: &LmConfig, dcfg: &DepFormerConfig, compute: bool) -> Result<Self> {
         let dim = dcfg.transformer.d_model;
         let mut slices = Vec::with_capacity(dcfg.num_slices);
         for s in 0..dcfg.num_slices {
@@ -105,26 +127,38 @@ impl DepFormer {
                 None => None,
                 Some(r) => Some(Linear::load(l, &join(&p, "emb.low_rank"), r, dim, false)?),
             };
+            if !compute {
+                slices.push(DepSlice {
+                    linear_in: None,
+                    emb,
+                    emb_dim,
+                    emb_vocab,
+                    low_rank,
+                    layers: Vec::new(),
+                    linear_out: None,
+                });
+                continue;
+            }
             slices.push(DepSlice {
-                linear_in: Linear::load(
+                linear_in: Some(Linear::load(
                     l,
                     &join(&p, "linear_in"),
                     cfg.transformer.d_model,
                     dim,
                     false,
-                )?,
+                )?),
                 emb,
                 emb_dim,
                 emb_vocab,
                 low_rank,
                 layers: load_layers(l, &join(&p, "transformer"), &dcfg.transformer)?,
-                linear_out: Linear::load(
+                linear_out: Some(Linear::load(
                     l,
                     &join(&p, "linear_out"),
                     dim,
                     cfg.audio_vocab_size - 1,
                     false,
-                )?,
+                )?),
             });
         }
         Ok(Self {
@@ -147,24 +181,47 @@ impl DepFormer {
         let mut logits = Vec::with_capacity(self.slices.len());
         let mut last_token = text_token;
         for (s, slice) in self.slices.iter().enumerate() {
-            let mut x = slice.linear_in.forward(hidden);
-            if let Some(t) = last_token {
-                let t = t as usize;
-                if t >= slice.emb_vocab {
-                    return Err(Error::Input(format!(
-                        "depformer slice {s}: token {t} out of range (vocab {})",
-                        slice.emb_vocab
-                    )));
-                }
-                let row = &slice.emb[t * slice.emb_dim..(t + 1) * slice.emb_dim];
-                let e = match &slice.low_rank {
-                    None => row.to_vec(),
-                    Some(lr) => lr.forward(row),
-                };
+            let (Some(linear_in), Some(linear_out)) = (&slice.linear_in, &slice.linear_out) else {
+                return Err(Error::Config(
+                    "depformer weights were not loaded for CPU compute".into(),
+                ));
+            };
+            let mut x = linear_in.forward(hidden);
+            if let Some(e) = slice.embed(s, last_token)? {
                 x.iter_mut().zip(&e).for_each(|(x, e)| *x += e);
             }
             let y = run_layers(&slice.layers, &mut self.caches, &self.pos_enc, &x);
-            let l = slice.linear_out.forward(&y);
+            let l = linear_out.forward(&y);
+            let token = sampler.sample(&l)?;
+            logits.push(l);
+            tokens.push(token);
+            last_token = Some(forced.get(s).copied().flatten().unwrap_or(token));
+        }
+        Ok(DepformerOutput { tokens, logits })
+    }
+
+    /// [`DepFormer::sample`] with the slices' compute on `accel`.
+    fn sample_accelerated(
+        &self,
+        accel: &mut dyn LmAccelerator,
+        hidden: &[f32],
+        text_token: Option<u32>,
+        forced: &[Option<u32>],
+        sampler: &mut Sampler,
+    ) -> Result<DepformerOutput> {
+        if self.slices.is_empty() {
+            return Ok(DepformerOutput {
+                tokens: vec![],
+                logits: vec![],
+            });
+        }
+        accel.depformer_begin(hidden)?;
+        let mut tokens = Vec::with_capacity(self.slices.len());
+        let mut logits = Vec::with_capacity(self.slices.len());
+        let mut last_token = text_token;
+        for (s, slice) in self.slices.iter().enumerate() {
+            let e = slice.embed(s, last_token)?;
+            let l = accel.depformer_slice(s, e.as_deref())?;
             let token = sampler.sample(&l)?;
             logits.push(l);
             tokens.push(token);
@@ -175,33 +232,55 @@ impl DepFormer {
 }
 
 /// Kyutai's multistream LM, batch 1, streaming one frame per [`LmModel::step`].
-#[derive(Clone, Debug)]
+///
+/// The transformer, text head and depformer compute run on the CPU, or on an
+/// [`LmAccelerator`] for a model built with [`LmModel::load_accelerated`].
+#[derive(Debug)]
 pub struct LmModel {
     cfg: LmConfig,
     text_emb: Vec<f32>,
     audio_embs: Vec<Vec<f32>>,
-    transformer: StreamingTransformer,
-    out_norm: Norm,
-    text_linear: Linear,
+    compute: Compute,
     depformer: Option<DepFormer>,
     extra_heads: Vec<Linear>,
     condition_provider: Option<ConditionProvider>,
 }
 
+/// Where the transformer, `out_norm`, text head and depformer slices run.
+#[derive(Debug)]
+enum Compute {
+    Cpu {
+        transformer: StreamingTransformer,
+        out_norm: Norm,
+        text_linear: Linear,
+    },
+    Accel(Box<dyn LmAccelerator>),
+}
+
 impl LmModel {
-    fn load_with(cfg: &LmConfig, l: &mut Loader) -> Result<Self> {
+    fn load_with(
+        cfg: &LmConfig,
+        l: &mut Loader,
+        accel: Option<Box<dyn LmAccelerator>>,
+    ) -> Result<Self> {
         cfg.validate()?;
         let d = cfg.transformer.d_model;
+        let cpu = accel.is_none();
         // A depformer with 0 slices (`v0_1_asr`) still exists, as in Kyutai:
         // `depformer_sample` then returns `Some(empty)`.
         let depformer = match &cfg.depformer {
-            Some(dc) => Some(DepFormer::load(l, cfg, dc)?),
+            Some(dc) => Some(DepFormer::load(l, cfg, dc, cpu)?),
             None => None,
         };
         let text_emb = l.get("text_emb.weight", &[cfg.text_in_vocab_size, d])?;
-        let out_norm = Norm::load(l, "out_norm", d, cfg.transformer.norm)?;
-        let text_linear = Linear::load(l, "text_linear", d, cfg.text_out_vocab_size, false)?;
-        let transformer = StreamingTransformer::load(l, "transformer", &cfg.transformer)?;
+        let compute = match accel {
+            Some(a) => Compute::Accel(a),
+            None => Compute::Cpu {
+                out_norm: Norm::load(l, "out_norm", d, cfg.transformer.norm)?,
+                text_linear: Linear::load(l, "text_linear", d, cfg.text_out_vocab_size, false)?,
+                transformer: StreamingTransformer::load(l, "transformer", &cfg.transformer)?,
+            },
+        };
         let audio_embs = (0..cfg.audio_codebooks)
             .map(|c| l.get(&format!("emb.{c}.weight"), &[cfg.audio_vocab_size, d]))
             .collect::<Result<_>>()?;
@@ -219,9 +298,7 @@ impl LmModel {
             cfg: cfg.clone(),
             text_emb,
             audio_embs,
-            transformer,
-            out_norm,
-            text_linear,
+            compute,
             depformer,
             extra_heads,
             condition_provider,
@@ -232,7 +309,25 @@ impl LmModel {
     /// and shape. Extra tensors in the source are ignored (as in Kyutai).
     pub fn load(cfg: &LmConfig, src: &mut dyn WeightSource) -> Result<Self> {
         let mut l = Loader::new(src, true);
-        Self::load_with(cfg, &mut l)
+        Self::load_with(cfg, &mut l, None)
+    }
+
+    /// Like [`LmModel::load`], with the transformer, text head and depformer
+    /// compute on `accel` (which has loaded its own weights). Only the
+    /// tensors the CPU side uses are read from `src`: embeddings,
+    /// conditioners and extra heads.
+    pub fn load_accelerated(
+        cfg: &LmConfig,
+        src: &mut dyn WeightSource,
+        accel: Box<dyn LmAccelerator>,
+    ) -> Result<Self> {
+        let mut l = Loader::new(src, true);
+        Self::load_with(cfg, &mut l, Some(accel))
+    }
+
+    /// Whether the compute runs on an [`LmAccelerator`].
+    pub fn is_accelerated(&self) -> bool {
+        matches!(self.compute, Compute::Accel(_))
     }
 
     /// Load from a safetensors file with Kyutai's tensor names (f32, bf16 or
@@ -252,7 +347,7 @@ impl LmModel {
     ) -> Result<NameCheck> {
         let mut src = ShapeManifest(shapes);
         let mut l = Loader::new(&mut src, false);
-        Self::load_with(cfg, &mut l)?;
+        Self::load_with(cfg, &mut l, None)?;
         Ok(NameCheck {
             used: l.used_count(),
             unused: l.unused(),
@@ -266,12 +361,18 @@ impl LmModel {
 
     /// Clear the temporal transformer's KV cache (Kyutai's `reset_state`).
     pub fn reset_state(&mut self) {
-        self.transformer.reset();
+        match &mut self.compute {
+            Compute::Cpu { transformer, .. } => transformer.reset(),
+            Compute::Accel(a) => a.reset(),
+        }
     }
 
     /// Frames processed since the last reset (the next RoPE position).
     pub fn current_seq_len(&self) -> usize {
-        self.transformer.current_seq_len()
+        match &self.compute {
+            Compute::Cpu { transformer, .. } => transformer.current_seq_len(),
+            Compute::Accel(a) => a.current_seq_len(),
+        }
     }
 
     /// Audio codebooks the temporal transformer reads.
@@ -347,9 +448,18 @@ impl LmModel {
             }
             x.iter_mut().zip(c).for_each(|(x, c)| *x += c);
         }
-        let y = self.transformer.step(&x);
-        let hidden = self.out_norm.forward(&y);
-        let text_logits = self.text_linear.forward(&hidden);
+        let (hidden, text_logits) = match &mut self.compute {
+            Compute::Cpu {
+                transformer,
+                out_norm,
+                text_linear,
+            } => {
+                let hidden = out_norm.forward(&transformer.step(&x));
+                let text_logits = text_linear.forward(&hidden);
+                (hidden, text_logits)
+            }
+            Compute::Accel(a) => a.step(&x)?,
+        };
         Ok(StepOutput {
             text_logits,
             hidden,
@@ -371,9 +481,14 @@ impl LmModel {
         forced: &[Option<u32>],
         sampler: &mut Sampler,
     ) -> Result<Option<DepformerOutput>> {
-        match self.depformer.as_mut() {
-            None => Ok(None),
-            Some(d) => d.sample(hidden, text_token, forced, sampler).map(Some),
+        let Some(d) = self.depformer.as_mut() else {
+            return Ok(None);
+        };
+        match &mut self.compute {
+            Compute::Cpu { .. } => d.sample(hidden, text_token, forced, sampler).map(Some),
+            Compute::Accel(a) => d
+                .sample_accelerated(a.as_mut(), hidden, text_token, forced, sampler)
+                .map(Some),
         }
     }
 }

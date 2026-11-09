@@ -1954,6 +1954,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "s2s-gpu"
+version = "0.1.0"
+dependencies = [
+ "cudarc",
+ "half",
+ "s2s-cuda",
+ "s2s-kernels",
+ "s2s-model",
+ "serde_json",
+]
+
+[[package]]
 name = "s2s-infer"
 version = "0.1.0"
 dependencies = [
@@ -1961,14 +1973,18 @@ dependencies = [
  "s2s-core",
  "s2s-data",
  "s2s-duplex",
+ "s2s-gpu",
  "s2s-kernels",
  "s2s-mimi",
  "s2s-model",
  "s2s-server",
+ "s2s-tokenizer",
  "s2s-tools",
  "serde_json",
  "tokio",
  "tokio-tungstenite 0.28.0",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1979,6 +1995,7 @@ dependencies = [
  "cutile-compiler",
  "cutile-ir",
  "num-traits",
+ "rayon",
  "s2s-core",
 ]
 

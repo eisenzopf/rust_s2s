@@ -608,10 +608,10 @@ Compute per tick has to stay under 80 ms at the target batch size to keep up wit
 | Milestone | Done without a GPU | Needs a GPU / external input |
 |---|---|---|
 | M0 Toolchain | Both CUDA Rust models build; all GPU kernels compile to cubins in CI; ADR 0001; **all kernels and cuBLASLt/NCCL smoke tests pass on an L40S** | Self-hosted GPU CI job; an H100 run |
-| M1 Tensor runtime | CPU reference kernels (fwd + bwd); `s2s-nn` layers; `s2s-cuda` cuBLASLt wrapper (compile-checked) | GPU tensor runtime behind the layers; parity on hardware |
-| M2 Attention / KV / sampling | KV-cache streaming step (CPU, = full forward to 1e-10); cuTile attention kernels exist upstream; cuda-oxide argmax + KV ring write | Flash-attention fwd/bwd on GPU; CUDA graphs; roofline numbers |
+| M1 Tensor runtime | CPU reference kernels (fwd + bwd); `s2s-nn` layers; `s2s-cuda` cuBLASLt wrapper; **inference runtime on GPU (`s2s-gpu`, ADR 0002): parity with the CPU port to 2.4e-6 (f32)** | GPU runtime behind the training layers (`s2s-nn`) |
+| M2 Attention / KV / sampling | KV-cache streaming step (CPU, = full forward to 1e-10); **split-K flash-decoding + rotating KV cache on GPU (cuda-oxide)**; cuda-oxide argmax + KV ring write | Flash-attention fwd/bwd for training; CUDA graphs; roofline numbers |
 | M3 Mimi | `s2s-mimi`: 100% code parity with Kyutai, streaming = offline; `mimi-tokenize` | Real checkpoint (Hugging Face blocked here); real-time speed |
-| M4 Duplex demo, Kyutai weights | `s2s-model::kyutai` (logits within 2.2e-5 of Kyutai); `KyutaiEngine` serves Moshi / STT through the server (fixture output identical to Kyutai's) | Real Moshi/STT checkpoints; GPU speed |
+| M4 Duplex demo, Kyutai weights | **Done:** Moshi 7B runs in real time (24 ms/frame on an L40S) through `s2s-kyutai-server` and the browser client; real Mimi / STT checkpoints verified | Mimi on GPU (removes pipelined decode latency) |
 | M5 Trainer | Layers with explicit backward, whole-model gradient checks, AdamW/schedules, bit-exact resume | Same loop on GPU kernels |
 | M6 Distributed + data | DDP / ZeRO-1 / sharded checkpoints over `ThreadComm` (= single process); NCCL communicator (compile-checked); `s2s-data` shards/loader | Multi-GPU NCCL run; throughput / MFU |
 | M7 Multistream + DSM | `s2s-duplex` (gradient-checked, streaming = training to 1e-10, packed windows); STT/TTS engine modes; tiny model trains on synthetic dialogues | Real data; training at S scale |
@@ -629,8 +629,9 @@ Compute per tick has to stay under 80 ms at the target batch size to keep up wit
    - Moshi 7B (`kyutai/moshiko-candle-bf16`): all 523 tensors used, none unused; greedy decoding finite and deterministic (`real_checkpoint_runs`). 30 GB RSS in f32, ~18 s per step on CPU.
    - STT 1B (`kyutai/stt-1b-en_fr-candle`): espeak-ng speech → `mimi-tokenize` (32 codebooks) → `real_stt_transcribes_codes` → SentencePiece decode gives the spoken sentence word for word ("Hello, I would like to check the weather in Paris tomorrow, and then book a table for two at 7pm."). 89 s for 9.5 s of audio on CPU.
    - Text tokenizers: `scripts/spm-to-tokenizer-json.py` converts Kyutai's SentencePiece models to `tokenizer.json` and checks them against sentencepiece (Moshi 32k: 44686/44691 lines of the repo identical, the rest exact score ties; STT 8k: identical except text that spells out `<pad>`). `s2s-tokenizer` loads both; the Moshi one is canonical.
-   - Remaining: serve `KyutaiEngine` + `MimiCodec` from the `s2s-server` binary. It needs step 3 to run in real time.
-3. **GPU tensor runtime (M1/M2).** Put the cuTile / cuda-oxide kernels behind `s2s-nn` layers, with parity against the CPU references, then real-time inference for M4.
+   - ~~Remaining: serve `KyutaiEngine` + `MimiCodec`.~~ Done: `s2s-kyutai-server` (step 3).
+3. **GPU inference runtime and real-time Moshi (M1/M2/M4).** Done 2026-11-09 (ADR 0002): `s2s-gpu` runs Kyutai's LM on one CUDA stream (cuBLASLt + cuda-oxide kernels), matching the CPU port (2.4e-6 relative in f32); Moshi 7B takes 24 ms per 80 ms frame on an L40S (CPU: ~18 s). `s2s-kyutai-server` serves it with CPU Mimi (multi-threaded, bit-identical; decode pipelined one frame) at a 60 ms mean engine step. Moshi's spoken replies, transcribed by our STT port, answer spoken questions coherently. Next for inference: Mimi on the GPU, CUDA graphs, bf16 KV cache.
+   - Still open: the GPU runtime behind `s2s-nn`'s training layers (forward + backward), which training needs.
 4. **Training at scale (M5–M9).** Real data, then `s2s-duplex-train` on GPU kernels.
 
 Each milestone has a concrete **exit criterion** that can be demonstrated. Sizes are rough, for a team of 2–3 experienced engineers (S ≈ 1–2 wk, M ≈ 3–5 wk, L ≈ 6–10 wk, XL ≈ 10+ wk, which depends mostly on compute and data rather than code).

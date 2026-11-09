@@ -48,6 +48,7 @@
 //! naming (`depformer.layers.*` with `weights_per_step`, `depformer_in.*`,
 //! `linears.*`): the candle checkpoints (`kyutai/*-candle*`) load directly.
 
+mod accel;
 mod asr;
 pub mod conditioner;
 pub mod config;
@@ -58,6 +59,7 @@ mod multistream;
 pub mod sampling;
 pub mod weights;
 
+pub use accel::LmAccelerator;
 pub use asr::{AsrMsg, AsrState};
 pub use conditioner::{Condition, ConditionProvider};
 pub use config::{AsrConfig, LmConfig, MultistreamConfig};
@@ -65,4 +67,4 @@ pub use error::{Error, Result};
 pub use lm::{DepformerOutput, LmModel, NameCheck, StepOutput};
 pub use multistream::{ForcedAudioTokens, FrameOutput, MultistreamState, UNGENERATED};
 pub use sampling::Sampler;
-pub use weights::{SafeTensors, TensorMap, WeightSource};
+pub use weights::{SafeTensors, StoredDtype, TensorInfo, TensorMap, WeightSource};

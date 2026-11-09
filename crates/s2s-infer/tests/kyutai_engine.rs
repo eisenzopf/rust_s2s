@@ -145,6 +145,7 @@ fn greedy() -> KyutaiEngineConfig {
         audio_sampling: SamplingParams::GREEDY,
         seed: 0,
         max_frames: 64,
+        pipeline_decode: false,
     }
 }
 
@@ -388,4 +389,30 @@ fn a_session_past_max_frames_fails_and_frees_the_model() {
     h.engine.open_session(2, &session(Mode::S2s)).unwrap();
     let outs = run(&mut h, 2, &codes[..3]).unwrap();
     assert_eq!(outs.len(), 3);
+}
+
+#[test]
+fn pipelined_decode_is_the_same_audio_one_frame_later() {
+    let user_audio = rows(&moshi().1["user_audio"]);
+    let mut outs = vec![];
+    for pipeline_decode in [false, true] {
+        let (model, _) = moshi();
+        let cfg = KyutaiEngineConfig {
+            pipeline_decode,
+            ..greedy()
+        };
+        let mut h = harness(model, 8, 16, cfg);
+        h.engine.open_session(1, &session(Mode::S2s)).unwrap();
+        outs.push(run(&mut h, 1, &user_audio).unwrap());
+    }
+    let (plain, piped) = (&outs[0], &outs[1]);
+    assert_eq!(assistant_text(piped), assistant_text(plain));
+    assert!(piped[0].audio.iter().all(|&x| x == 0.0));
+    for i in 1..plain.len() {
+        assert_eq!(piped[i].audio, plain[i - 1].audio, "frame {i}");
+    }
+    assert!(
+        plain.iter().any(|o| o.audio.iter().any(|&x| x != 0.0)),
+        "fixture should produce audio"
+    );
 }

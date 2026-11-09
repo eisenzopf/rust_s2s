@@ -73,6 +73,13 @@ pub struct KyutaiEngineConfig {
     /// Most frames per Moshi session (the driver's token grid is sized by
     /// it; the KV cache itself is a sliding window).
     pub max_frames: usize,
+    /// Decode Moshi's audio for frame `t - 1` on a second thread while the
+    /// model steps frame `t`. The per-frame critical path drops from
+    /// `encode + model + decode` to about `max(encode + model, decode)`, at
+    /// the cost of one frame (80 ms) more output latency. Off by default
+    /// (output is then aligned exactly like Kyutai's); a server running a
+    /// CPU codec next to a GPU model should turn it on.
+    pub pipeline_decode: bool,
 }
 
 impl Default for KyutaiEngineConfig {
@@ -92,6 +99,7 @@ impl Default for KyutaiEngineConfig {
             },
             seed: 0,
             max_frames: 45_000,
+            pipeline_decode: false,
         }
     }
 }
@@ -124,10 +132,18 @@ impl Driver {
     }
 }
 
+/// A second codec for pipelined decoding, and the generated tokens it
+/// decodes next.
+type PipelinedDecoder = (Box<dyn FrameCodec>, Option<Vec<u32>>);
+
 struct Session {
     id: u64,
     driver: Driver,
     codec: Box<dyn FrameCodec>,
+    /// With [`KyutaiEngineConfig::pipeline_decode`]: a second codec whose
+    /// decoder runs on a helper thread, and the generated tokens it decodes
+    /// next.
+    pipeline: Option<PipelinedDecoder>,
     text: Utf8Buf,
     user_turn: TurnTracker,
     asst_turn: TurnTracker,
@@ -260,14 +276,36 @@ impl KyutaiEngine {
             Some(false) => out.events.push(EngineEvent::Turn(TurnEvent::UserStopped)),
             None => {}
         }
-        let codes = s.codec.encode(&input.audio[..]);
         match &mut s.driver {
             Driver::Moshi { state, prev_text } => {
-                let frame = state.step(Some(*prev_text), &codes, None, None);
+                // Pipelined decode of the previous frame's tokens, overlapped
+                // with encoding and stepping this frame.
+                let codec = &mut s.codec;
+                let (frame, prev_pcm) = match &mut s.pipeline {
+                    Some((dec, pending)) => {
+                        let pending = pending.take();
+                        std::thread::scope(|scope| {
+                            let h = scope.spawn(move || pending.map(|t| dec.decode(&t)));
+                            let codes = codec.encode(&input.audio[..]);
+                            let frame = state.step(Some(*prev_text), &codes, None, None);
+                            (frame, h.join().unwrap_or(None))
+                        })
+                    }
+                    None => {
+                        let codes = codec.encode(&input.audio[..]);
+                        (state.step(Some(*prev_text), &codes, None, None), None)
+                    }
+                };
                 let frame = frame.map_err(fail)?;
                 *prev_text = frame.text_token;
                 let cfg = state.config();
                 let t = frame.text_token;
+                tracing::trace!(
+                    session = sid,
+                    step = state.step_idx(),
+                    text_token = t,
+                    "moshi text"
+                );
                 let is_pad = t == cfg.text_pad_token || t == cfg.text_eop_token;
                 if !is_pad && t != cfg.text_start_token {
                     if let Some(bytes) = self.token_bytes(t) {
@@ -286,14 +324,23 @@ impl KyutaiEngine {
                         .push(EngineEvent::Turn(TurnEvent::AssistantStopped)),
                     None => {}
                 }
-                if let Some(row) = state.last_audio_tokens() {
-                    let gen = cfg.generated_audio_codebooks;
-                    let pcm = s.codec.decode(&row[..gen]);
+                let gen = cfg.generated_audio_codebooks;
+                let pcm = match &mut s.pipeline {
+                    Some((_, pending)) => {
+                        *pending = state.last_audio_tokens().map(|row| row[..gen].to_vec());
+                        prev_pcm
+                    }
+                    None => state
+                        .last_audio_tokens()
+                        .map(|row| s.codec.decode(&row[..gen])),
+                };
+                if let Some(pcm) = pcm {
                     let n = pcm.len().min(out.audio.len());
                     out.audio[..n].copy_from_slice(&pcm[..n]);
                 }
             }
             Driver::Stt(state) => {
+                let codes = s.codec.encode(&input.audio[..]);
                 for msg in state.step_tokens(&codes).map_err(fail)? {
                     if let AsrMsg::Word { tokens, .. } = msg {
                         let mut text = String::new();
@@ -388,10 +435,12 @@ impl Engine for KyutaiEngine {
                 AsrState::from_config(lm, asr).expect("ASR settings validated in new"),
             )),
         };
+        let pipeline = self.cfg.pipeline_decode.then(|| ((self.new_codec)(), None));
         self.session = Some(Session {
             id,
             driver,
             codec,
+            pipeline,
             text: Utf8Buf::default(),
             user_turn: TurnTracker::default(),
             asst_turn: TurnTracker::default(),

@@ -13,6 +13,7 @@ members = [
     "crates/s2s-model",
     "crates/s2s-mimi",
     "crates/s2s-cuda",
+    "crates/s2s-gpu",
     "crates/s2s-tokenizer",
     "crates/s2s-eval",
 ]

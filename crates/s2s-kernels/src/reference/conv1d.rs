@@ -81,20 +81,100 @@ pub fn linear_lanes_fwd<T: Float>(
     if let Some(b) = bias {
         assert_eq!(b.len(), d_out, "linear_lanes_fwd: bias has wrong length");
     }
-    let mut r0 = 0;
+    #[cfg(feature = "parallel")]
+    if rows * d_in * d_out >= PAR_MIN_MACS {
+        return par::linear_lanes_fwd(x, w, bias, y, rows, d_in, d_out);
+    }
+    linear_lanes_rows(x, w, bias, y, 0, rows, d_in, d_out);
+}
+
+/// [`linear_lanes_fwd`] for rows `[r_begin, r_end)` of `x`, written to `y`
+/// (which holds exactly those rows).
+#[allow(clippy::too_many_arguments)]
+fn linear_lanes_rows<T: Float>(
+    x: &[T],
+    w: &[T],
+    bias: Option<&[T]>,
+    y: &mut [T],
+    r_begin: usize,
+    rows: usize,
+    d_in: usize,
+    d_out: usize,
+) {
+    let mut r0 = r_begin;
     while r0 < rows {
         let r1 = (r0 + ROW_TILE).min(rows);
         for o in 0..d_out {
             let wo = &w[o * d_in..(o + 1) * d_in];
             for r in r0..r1 {
                 let acc = dot_lanes(&x[r * d_in..(r + 1) * d_in], wo);
-                y[r * d_out + o] = match bias {
+                y[(r - r_begin) * d_out + o] = match bias {
                     Some(b) => acc + b[o],
                     None => acc,
                 };
             }
         }
         r0 = r1;
+    }
+}
+
+/// Work (multiply-adds) above which [`linear_lanes_fwd`] uses threads.
+#[cfg(feature = "parallel")]
+const PAR_MIN_MACS: usize = 1 << 18;
+
+/// Multi-threaded [`linear_lanes_fwd`] (feature `parallel`). Every output
+/// element is still one [`dot_lanes`] reduction plus the bias, so results are
+/// bit-identical to the single-threaded path; only which thread computes
+/// which element changes.
+#[cfg(feature = "parallel")]
+mod par {
+    use super::*;
+    use rayon::prelude::*;
+
+    pub(super) fn linear_lanes_fwd<T: Float + Send + Sync>(
+        x: &[T],
+        w: &[T],
+        bias: Option<&[T]>,
+        y: &mut [T],
+        rows: usize,
+        d_in: usize,
+        d_out: usize,
+    ) {
+        let threads = rayon::current_num_threads().max(1);
+        if rows >= 2 * threads {
+            // Many rows (early conv layers): split rows.
+            let per = rows.div_ceil(threads).max(ROW_TILE);
+            y.par_chunks_mut(per * d_out)
+                .enumerate()
+                .for_each(|(i, yc)| {
+                    let r0 = i * per;
+                    let r1 = (r0 + per).min(rows);
+                    let xs = &x[r0 * d_in..r1 * d_in];
+                    linear_lanes_rows(xs, w, bias, yc, 0, r1 - r0, d_in, d_out);
+                });
+        } else {
+            // Few rows, many outputs (deep layers, transformer): split
+            // output columns into blocks, then scatter into `y`.
+            let per = d_out.div_ceil(threads).max(8);
+            let blocks: Vec<(usize, Vec<T>)> = (0..d_out.div_ceil(per))
+                .into_par_iter()
+                .map(|bi| {
+                    let (o0, o1) = (bi * per, ((bi + 1) * per).min(d_out));
+                    let n = o1 - o0;
+                    let mut out = vec![T::zero(); rows * n];
+                    let wb = &w[o0 * d_in..o1 * d_in];
+                    let bb = bias.map(|b| &b[o0..o1]);
+                    linear_lanes_rows(x, wb, bb, &mut out, 0, rows, d_in, n);
+                    (o0, out)
+                })
+                .collect();
+            for (o0, out) in blocks {
+                let n = out.len() / rows.max(1);
+                for r in 0..rows {
+                    y[r * d_out + o0..r * d_out + o0 + n].copy_from_slice(&out[r * n..(r + 1) * n]);
+                }
+            }
+        }
     }
 }
 

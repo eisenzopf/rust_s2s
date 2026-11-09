@@ -4,6 +4,7 @@ A full-duplex speech-to-speech model (STT + LLM + TTS + tool calling fused into 
 
 - 📐 [Implementation plan](docs/IMPLEMENTATION_PLAN.md): design, kernels, training recipe, streaming runtime, milestones
 - 🧭 [ADR 0001: GPU toolchain](docs/decisions/0001-gpu-toolchain.md): how cuTile and cuda-oxide are used, and what has been verified
+- ⚡ [ADR 0002: inference hot path](docs/decisions/0002-inference-hot-path.md): real-time decode on one CUDA stream (cuBLASLt + cuda-oxide kernels)
 
 **Status:** everything that can be built and verified without a GPU is in place:
 - the full model;
@@ -13,7 +14,7 @@ A full-duplex speech-to-speech model (STT + LLM + TTS + tool calling fused into 
 - Mimi and Kyutai-LM ports that match Kyutai's own code;
 - GPU kernels in both CUDA Rust models.
 
-**Every GPU kernel has now run on a GPU** (NVIDIA L40S, sm_89) and matches its CPU reference: 7 cuTile kernels, 6 cuda-oxide kernels, and the cuBLASLt / NCCL / cuTile-interop tests in `s2s-cuda`. The layers do not use the GPU kernels yet, and no model has been trained beyond tiny CPU runs. See the plan's milestone status notes.
+**A real speech-to-speech model now runs in real time on our stack.** Kyutai's Moshi 7B runs on the GPU (`s2s-gpu`) at 24 ms per 80 ms frame, with Mimi on the CPU, behind our streaming server and browser client ([Talk to Moshi](#talk-to-moshi-on-a-gpu) below). Every GPU kernel matches its CPU reference on an NVIDIA L40S. Our own model (`s2s-duplex`, with tool calling) has not been trained beyond tiny CPU runs. See the plan's milestone status notes.
 
 ## Layout
 
@@ -30,6 +31,7 @@ A full-duplex speech-to-speech model (STT + LLM + TTS + tool calling fused into 
 | `crates/s2s-infer` | streaming engine: the duplex model behind the server's `Engine` trait, with grammar-masked tool calls, tool executor, result injection, S2S/STT/TTS modes, turn events; `KyutaiEngine` serves Kyutai Moshi / STT checkpoints through the same trait; `MimiCodec` / `ToneCodec` | stable (1.89+) |
 | `crates/s2s-mimi` | Kyutai's Mimi codec on CPU (offline and streaming; matches Kyutai's implementation, 100% of codes); `mimi-tokenize` CLI (WAV ⇄ codes) | stable (1.89+) |
 | `crates/s2s-model` | Kyutai's multistream LM (Moshi / DSM STT) on CPU, loading their checkpoints; matches their logits to within 2.2e-5 | stable (1.89+) |
+| `crates/s2s-gpu` | CUDA inference runtime behind feature `cuda`: Kyutai's multistream LM on the GPU (`GpuLm`, an `s2s-model` `LmAccelerator`) with cuBLASLt GEMMs and cuda-oxide kernels on one stream; PTX prebuilt by `scripts/build-simt-ptx.sh` (ADR 0002) | stable (1.89+) |
 | `crates/s2s-cuda` | `cudarc` wrappers behind feature `cuda`: cuBLASLt GEMM, NCCL communicator, cudarc↔cuTile zero-copy interop (compile-checked) | stable (1.89+) |
 | `crates/s2s-tokenizer` | text tokenizer: model-agnostic Hugging Face `tokenizer.json` wrapper that appends the stream special tokens, fixes the text-stream encoding conventions and implements the tokenizer traits of `s2s-tools` (grammar masks) and `s2s-data` (training data); small trained test tokenizers | stable (1.89+) |
 | `crates/s2s-eval` | evaluation (CPU): WER/CER with S/D/I alignment and text normalization, tool-calling accuracy, latency percentiles and turn-taking latency, SI-SDR and log-mel distance (codec proxies); `s2s-eval` CLI (`wer`, `tools`, `latency`, `audio`) | stable (1.89+) |
@@ -82,6 +84,26 @@ cargo run --release -p s2s-duplex --bin s2s-duplex-train -- --shards dialogues.s
 
 # Tokenize real audio with Mimi (needs Kyutai's Mimi checkpoint)
 cargo run --release -p s2s-mimi --bin mimi-tokenize -- encode --weights tokenizer.safetensors speech.wav speech.codes.json
+```
+
+### Talk to Moshi on a GPU
+
+Needs an sm_80+ GPU with 24 GB or more (Moshi's bf16 weights are 15.4 GB, plus a 3 GB KV cache) and the CUDA wheel toolkit above. Get Kyutai's checkpoints (`kyutai/moshiko-candle-bf16`: `model.safetensors`, `tokenizer-e351c8d8-checkpoint125.safetensors`, `tokenizer_spm_32k_3.model`), convert the text tokenizer, and start the server:
+
+```bash
+hf download kyutai/moshiko-candle-bf16 --local-dir moshiko
+scripts/spm-to-tokenizer-json.py moshiko/tokenizer_spm_32k_3.model moshiko/tokenizer.json
+cargo run --release -p s2s-infer --features cuda --bin s2s-kyutai-server -- \
+  --lm moshiko/model.safetensors --mimi moshiko/tokenizer-e351c8d8-checkpoint125.safetensors \
+  --tokenizer moshiko/tokenizer.json --bind 127.0.0.1:8080
+```
+
+Open `http://127.0.0.1:8080/`, choose `s2s` and press Start (browsers allow the microphone on `localhost`; on a remote GPU box, forward the port, e.g. with SSM or `ssh -L`). `--stt-config config-stt-en_fr-hf.toml` with `kyutai/stt-1b-en_fr-candle` serves speech-to-text instead.
+
+The GPU parity tests compare `GpuLm` with the CPU port (`S2S_KYUTAI_LM_WEIGHTS` adds a Moshi 7B timing run):
+
+```bash
+cargo test -p s2s-gpu --features cuda --release -- --ignored --nocapture
 ```
 
 ### GPU tests on AWS

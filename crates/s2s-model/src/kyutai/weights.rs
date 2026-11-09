@@ -258,6 +258,34 @@ impl SafeTensors {
     }
 }
 
+impl SafeTensors {
+    /// The stored bytes of tensor `name` (little-endian, in its stored
+    /// dtype), with that dtype. For loaders that keep the stored precision,
+    /// e.g. bf16 weights uploaded to a GPU as is.
+    pub fn read_raw(&mut self, name: &str) -> Result<(StoredDtype, Vec<u8>)> {
+        let info = self
+            .header
+            .get(name)
+            .ok_or_else(|| Error::MissingTensor(name.to_string()))?;
+        let (dtype, (s, e)) = (info.dtype, info.offsets);
+        Ok((dtype, self.raw_range(s, e)?))
+    }
+
+    fn raw_range(&mut self, s: usize, e: usize) -> Result<Vec<u8>> {
+        Ok(match &mut self.backing {
+            Backing::Bytes { bytes, data_start } => {
+                bytes[*data_start + s..*data_start + e].to_vec()
+            }
+            Backing::File { file, data_start } => {
+                file.seek(SeekFrom::Start(*data_start + s as u64))?;
+                let mut buf = vec![0u8; e - s];
+                file.read_exact(&mut buf)?;
+                buf
+            }
+        })
+    }
+}
+
 impl WeightSource for SafeTensors {
     fn shape(&self, name: &str) -> Option<Vec<usize>> {
         self.header.get(name).map(|i| i.shape.clone())
@@ -268,19 +296,9 @@ impl WeightSource for SafeTensors {
             .header
             .get(name)
             .ok_or_else(|| Error::MissingTensor(name.to_string()))?;
-        let (s, e) = info.offsets;
-        let raw = match &mut self.backing {
-            Backing::Bytes { bytes, data_start } => {
-                bytes[*data_start + s..*data_start + e].to_vec()
-            }
-            Backing::File { file, data_start } => {
-                file.seek(SeekFrom::Start(*data_start + s as u64))?;
-                let mut buf = vec![0u8; e - s];
-                file.read_exact(&mut buf)?;
-                buf
-            }
-        };
-        Ok(convert(info.dtype, &raw))
+        let (dtype, (s, e)) = (info.dtype, info.offsets);
+        let raw = self.raw_range(s, e)?;
+        Ok(convert(dtype, &raw))
     }
 
     fn names(&self) -> Vec<String> {

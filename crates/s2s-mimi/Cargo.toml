@@ -9,7 +9,9 @@ repository.workspace = true
 
 [dependencies]
 s2s-core.workspace = true
-s2s-kernels.workspace = true
+# Threads for the conv/linear GEMMs: streaming Mimi must keep up with real
+# time next to the LM.
+s2s-kernels = { workspace = true, features = ["parallel"] }
 safetensors.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -1,0 +1,30 @@
+[package]
+name = "s2s-gpu"
+description = "CUDA inference runtime for rust_s2s: Kyutai's multistream LM (Moshi / DSM STT) on the GPU behind s2s-model's LmAccelerator, with cuBLASLt GEMMs and cuda-oxide SIMT kernels on one stream. Everything GPU-related is behind feature `cuda`."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+# Building needs CUDA 13.2+ headers (set CUDA_TOOLKIT_PATH, see
+# scripts/fetch-cuda-wheels.sh) because s2s-cuda pulls in cuTile; running
+# needs an sm_80+ GPU, driver R580+ and libcublasLt.
+cuda = ["dep:cudarc", "dep:half", "dep:s2s-cuda", "s2s-cuda/cuda"]
+
+[dependencies]
+s2s-model.workspace = true
+s2s-kernels.workspace = true
+s2s-cuda = { path = "../s2s-cuda", optional = true }
+# `nvrtc` only for the `Ptx` type that `CudaContext::load_module` takes; the
+# PTX is prebuilt by cuda-oxide, nothing is compiled at run time.
+cudarc = { workspace = true, optional = true, features = ["nvrtc"] }
+half = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

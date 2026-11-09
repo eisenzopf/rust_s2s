@@ -16,8 +16,19 @@ s2s-tools.workspace = true
 s2s-server = { path = "../s2s-server" }
 s2s-mimi.workspace = true
 s2s-model.workspace = true
+s2s-tokenizer.workspace = true
+# GPU LM for the Kyutai server (feature `cuda`).
+s2s-gpu = { path = "../s2s-gpu", optional = true }
 serde_json.workspace = true
-tokio = { version = "1", features = ["rt", "sync"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "signal", "sync"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "ansi"] }
+
+[features]
+default = []
+# Run the Kyutai LM on the GPU in `s2s-kyutai-server` (needs CUDA headers to
+# build and an sm_80+ GPU to run; see crates/s2s-gpu).
+cuda = ["dep:s2s-gpu", "s2s-gpu/cuda"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "net"] }

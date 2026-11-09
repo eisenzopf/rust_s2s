@@ -12,10 +12,15 @@ default = []
 # GPU kernels written in cuTile Rust. Building needs CUDA 13.2+ headers
 # (set CUDA_TOOLKIT_PATH); running needs an sm_80+ GPU and driver R580+.
 cuda = ["dep:cutile", "dep:cutile-ir", "dep:cutile-compiler"]
+# Multi-threaded `linear_lanes_fwd` (the GEMM behind every Mimi conv and
+# linear), bit-identical to the single-threaded path.
+parallel = ["dep:rayon"]
 
 [dependencies]
 s2s-core.workspace = true
 num-traits.workspace = true
+# Feature `parallel`: multi-threaded `linear_lanes_fwd` (bit-identical).
+rayon = { version = "1", optional = true }
 cutile = { workspace = true, optional = true }
 # Used by tests/cuda_compile.rs (driver-free Tile IR lowering and cubin
 # assembly). Regular optional deps rather than dev-deps so that CPU-only

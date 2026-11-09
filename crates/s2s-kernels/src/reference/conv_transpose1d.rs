@@ -110,6 +110,11 @@ pub fn conv_transpose1d_accumulate<T: Float>(
         p.batch * t_acc * p.c_out,
         "conv_transpose1d: acc has wrong length"
     );
+    #[cfg(feature = "parallel")]
+    if p.groups == 1 && p.t_in * p.c_in * p.kernel * cog >= 1 << 18 {
+        par::accumulate(p, x, w_packed, acc, t_acc);
+        return;
+    }
     for b in 0..p.batch {
         let acc_b = &mut acc[b * t_acc * p.c_out..(b + 1) * t_acc * p.c_out];
         for t in 0..p.t_in {
@@ -125,6 +130,62 @@ pub fn conv_transpose1d_accumulate<T: Float>(
                             *r = *r + xv * wv;
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+/// Multi-threaded [`conv_transpose1d_accumulate`] for `groups == 1`
+/// (feature `parallel`): threads own disjoint blocks of output channels.
+/// Each block starts from the accumulator's current values and adds the
+/// contributions in the same `(t, ci, kk)` order, so results are
+/// bit-identical to the single-threaded path.
+#[cfg(feature = "parallel")]
+mod par {
+    use super::*;
+    use rayon::prelude::*;
+
+    pub(super) fn accumulate<T: Float>(
+        p: &ConvTranspose1dParams,
+        x: &[T],
+        w_packed: &[T],
+        acc: &mut [T],
+        t_acc: usize,
+    ) {
+        let c_out = p.c_out;
+        let per = c_out.div_ceil(rayon::current_num_threads().max(1)).max(8);
+        for b in 0..p.batch {
+            let acc_b = &mut acc[b * t_acc * c_out..(b + 1) * t_acc * c_out];
+            let blocks: Vec<(usize, Vec<T>)> = (0..c_out.div_ceil(per))
+                .into_par_iter()
+                .map(|bi| {
+                    let (o0, o1) = (bi * per, ((bi + 1) * per).min(c_out));
+                    let n = o1 - o0;
+                    let mut local: Vec<T> = (0..t_acc)
+                        .flat_map(|u| acc_b[u * c_out + o0..u * c_out + o1].iter().copied())
+                        .collect();
+                    for t in 0..p.t_in {
+                        for ci in 0..p.c_in {
+                            let xv = x[(b * p.c_in + ci) * p.t_in + t];
+                            for kk in 0..p.kernel {
+                                let u = t * p.stride + kk;
+                                let wr = &w_packed[(ci * p.kernel + kk) * c_out + o0..][..n];
+                                let row = &mut local[u * n..(u + 1) * n];
+                                for (r, &wv) in row.iter_mut().zip(wr) {
+                                    *r = *r + xv * wv;
+                                }
+                            }
+                        }
+                    }
+                    (o0, local)
+                })
+                .collect();
+            for (o0, local) in blocks {
+                let n = local.len() / t_acc.max(1);
+                for u in 0..t_acc {
+                    acc_b[u * c_out + o0..u * c_out + o0 + n]
+                        .copy_from_slice(&local[u * n..(u + 1) * n]);
                 }
             }
         }

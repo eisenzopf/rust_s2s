@@ -26,6 +26,9 @@ pub enum Error {
     Unsupported(String),
     /// Bad runtime input (token out of range, wrong number of codebooks, ...).
     Input(String),
+    /// Failure in an [`LmAccelerator`](super::LmAccelerator) (GPU driver,
+    /// library or launch error).
+    Backend(String),
 }
 
 impl fmt::Display for Error {
@@ -45,6 +48,7 @@ impl fmt::Display for Error {
             ),
             Error::Unsupported(m) => write!(f, "unsupported: {m}"),
             Error::Input(m) => write!(f, "invalid input: {m}"),
+            Error::Backend(m) => write!(f, "backend error: {m}"),
         }
     }
 }

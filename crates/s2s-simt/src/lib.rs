@@ -25,6 +25,9 @@
 
 use cuda_host::cuda_module;
 
+mod infer_kernels;
+pub use infer_kernels::infer;
+
 /// Threads per block for every kernel here (one thread per output element).
 pub const BLOCK: u32 = 256;
 
