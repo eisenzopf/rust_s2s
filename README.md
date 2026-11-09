@@ -83,7 +83,7 @@ cargo run --release -p s2s-mimi --bin mimi-tokenize -- encode --weights tokenize
 
 ### GPU tests on AWS
 
-`scripts/aws/run_gpu_tests.py` runs all of the above on a short-lived EC2 GPU instance (default `g6.xlarge`, NVIDIA L4) that terminates itself when done, with a hard 2-hour deadline. It needs AWS credentials in the environment. `scripts/aws/iam-policy.json` is a minimal IAM policy for it: it may launch only Ampere-or-newer GPU instances and write only to its own log bucket.
+`scripts/aws/run_gpu_tests.py` runs all of the above on a short-lived EC2 GPU instance (default `g6.xlarge`, NVIDIA L4) that terminates itself when done, with a hard 2-hour deadline. It needs AWS credentials: `S2S_AWS_ACCESS_KEY_ID` / `S2S_AWS_SECRET_ACCESS_KEY` if set, otherwise the normal AWS credential chain (an SSO login or `AWS_PROFILE` on your machine works), and `pip install boto3`. Run it from a machine with your AWS login; the cloud dev environment has none. `scripts/aws/iam-policy.json` is a minimal IAM policy for it: it may launch only Ampere-or-newer GPU instances and write only to its own log bucket.
 
 ```bash
 python3 scripts/aws/run_gpu_tests.py --dry-run   # show the plan, no AWS calls

@@ -619,6 +619,15 @@ Compute per tick has to stay under 80 ms at the target batch size to keep up wit
 | M9 Scale-up | Training driver `s2s-duplex-train` (exact resume) | Compute + data |
 | M10 Production | Server (backpressure, admission by session count, turn events), AWS GPU-test launcher | Admission by tick budget, FP8, load tests on GPUs |
 
+**Verified so far (2026-11-09, commit `3e2c5c0`).** 329 CPU tests pass (5 more need real weights, a real tokenizer or a GPU and are ignored); fmt, clippy and docs are clean on Rust 1.99.1; CI is green on all three tiers (cpu, cuda-compile, simt-compile).
+
+**Next steps, in order:**
+
+1. **First GPU run (owner, locally).** The cloud dev environment has no AWS credentials, so the owner runs `scripts/aws/run_gpu_tests.py` from their own machine (it uses the normal AWS credential chain, e.g. an SSO login or `AWS_PROFILE`; needs `boto3`). It launches one `g6.xlarge` (L4), runs the GPU tests, prints the log and terminates the instance (hard 2-hour deadline). Bring the log back; failures there are the next work items.
+2. **Real weights.** Download Mimi, Moshi and `stt-1b-en_fr` (candle checkpoints) and Kyutai's text tokenizer (convert `tokenizer_spm_*.model` to `tokenizer.json`), then run the ignored tests and serve `KyutaiEngine` with `MimiCodec`. Needs huggingface.co access, which the cloud dev environment blocks.
+3. **GPU tensor runtime (M1/M2).** Put the cuTile / cuda-oxide kernels behind `s2s-nn` layers, with parity against the CPU references, then real-time inference for M4.
+4. **Training at scale (M5–M9).** Real data, then `s2s-duplex-train` on GPU kernels.
+
 Each milestone has a concrete **exit criterion** that can be demonstrated. Sizes are rough, for a team of 2–3 experienced engineers (S ≈ 1–2 wk, M ≈ 3–5 wk, L ≈ 6–10 wk, XL ≈ 10+ wk, which depends mostly on compute and data rather than code).
 
 Tracks:
