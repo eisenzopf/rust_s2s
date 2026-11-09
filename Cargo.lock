@@ -301,7 +301,7 @@ checksum = "157a8ba7b480713b56f4c09fd13fc3e0a22a5dfab8097ba61cbc5feef950788a"
 dependencies = [
  "glob",
  "libc",
- "libloading",
+ "libloading 0.8.9",
 ]
 
 [[package]]
@@ -449,7 +449,7 @@ version = "0.5.0"
 source = "git+https://github.com/NVIDIA/cuda-rust?rev=367bc0f8e671070e00eebc7e5498f3e8eebefc72#367bc0f8e671070e00eebc7e5498f3e8eebefc72"
 dependencies = [
  "bindgen",
- "libloading",
+ "libloading 0.8.9",
  "prettyplease",
  "proc-macro2",
  "quote",
@@ -484,6 +484,16 @@ dependencies = [
 name = "cuda-repr"
 version = "0.5.0"
 source = "git+https://github.com/NVIDIA/cuda-rust?rev=367bc0f8e671070e00eebc7e5498f3e8eebefc72#367bc0f8e671070e00eebc7e5498f3e8eebefc72"
+
+[[package]]
+name = "cudarc"
+version = "0.19.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7359bf1de037ddada72729c3acec9b040f3468400c6e9e740b01ba0cd2e89562"
+dependencies = [
+ "half",
+ "libloading 0.9.0",
+]
 
 [[package]]
 name = "cutile"
@@ -835,6 +845,9 @@ dependencies = [
  "bytemuck",
  "cfg-if",
  "crunchy",
+ "num-traits",
+ "rand",
+ "rand_distr",
  "zerocopy",
 ]
 
@@ -1090,6 +1103,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "libloading"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "754ca22de805bb5744484a5b151a9e1a8e837d5dc232c2d7d8c2e3492edc8b60"
+dependencies = [
+ "cfg-if",
+ "windows-link",
+]
+
+[[package]]
+name = "libm"
+version = "0.2.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
+
+[[package]]
 name = "linkme"
 version = "0.3.38"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1301,6 +1330,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
+ "libm",
 ]
 
 [[package]]
@@ -1490,6 +1520,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rand_distr"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a8615d50dcf34fa31f7ab52692afec947c4dd0ab803cc87cb3b0b4570ff7463"
+dependencies = [
+ "num-traits",
+ "rand",
+]
+
+[[package]]
 name = "rayon"
 version = "1.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1628,6 +1668,18 @@ name = "s2s-core"
 version = "0.1.0"
 dependencies = [
  "num-traits",
+]
+
+[[package]]
+name = "s2s-cuda"
+version = "0.1.0"
+dependencies = [
+ "cudarc",
+ "cutile",
+ "half",
+ "s2s-core",
+ "s2s-kernels",
+ "s2s-train",
 ]
 
 [[package]]

@@ -1,0 +1,31 @@
+[package]
+name = "s2s-cuda"
+description = "GPU library wrappers for rust_s2s over cudarc: cuBLASLt GEMMs, an NCCL communicator for data-parallel training, and zero-copy buffer sharing with cuTile. Everything GPU-related is behind feature `cuda`."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+# cuBLASLt, NCCL and cuTile interop. Building needs CUDA 13.2+ headers for
+# cuTile (set CUDA_TOOLKIT_PATH); cudarc itself opens its libraries at run
+# time. Running needs an sm_80+ GPU, driver R580+, and libcublasLt / libnccl
+# on the library path.
+cuda = ["dep:cudarc", "dep:cutile", "dep:half"]
+
+[dependencies]
+# CPU-only crates: the GEMM layout planner reuses the reference `Trans`, and
+# the NCCL communicator implements `s2s_train::comm::Communicator`.
+s2s-kernels.workspace = true
+s2s-train.workspace = true
+cudarc = { workspace = true, optional = true }
+cutile = { workspace = true, optional = true }
+half = { workspace = true, optional = true }
+
+[dev-dependencies]
+s2s-core.workspace = true
+
+[lints]
+workspace = true

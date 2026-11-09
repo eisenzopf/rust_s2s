@@ -1,6 +1,6 @@
 [package]
 name = "s2s-train"
-description = "Training loop pieces for rust_s2s: AdamW with parameter groups, LR schedules, safetensors checkpoints with exact resume."
+description = "Training loop pieces for rust_s2s: AdamW with parameter groups, LR schedules, safetensors checkpoints with exact resume, and data-parallel training (DDP, ZeRO-1, sharded checkpoints) over a Communicator trait."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

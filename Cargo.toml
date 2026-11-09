@@ -12,6 +12,7 @@ members = [
     "crates/s2s-infer",
     "crates/s2s-model",
     "crates/s2s-mimi",
+    "crates/s2s-cuda",
 ]
 # cuda-oxide crate: own toolchain (Rust 1.99.1), built with `cargo oxide`.
 # kyutai-ref-lm / kyutai-ref-mimi: standalone fixture generators with their
@@ -52,6 +53,12 @@ toml = "0.8"
 # share one runtime to run on the same streams and buffers. See ADR 0001.
 cutile = { git = "https://github.com/NVIDIA/cuda-rust", rev = "367bc0f8e671070e00eebc7e5498f3e8eebefc72" }
 cutile-ir = { git = "https://github.com/NVIDIA/cuda-rust", rev = "367bc0f8e671070e00eebc7e5498f3e8eebefc72" }
+# cuBLASLt and NCCL for s2s-cuda (feature `cuda`). Dynamic loading: nothing is
+# linked at build time, so it builds without CUDA libraries or a GPU, and the
+# libraries are opened at first use. CUDA 13.0 bindings (driver R580+, same
+# floor as cuTile).
+cudarc = { version = "0.19.10", default-features = false, features = ["std", "driver", "cublaslt", "nccl", "f16", "dynamic-loading", "cuda-13000"] }
+half = "2"
 cutile-compiler = { git = "https://github.com/NVIDIA/cuda-rust", rev = "367bc0f8e671070e00eebc7e5498f3e8eebefc72" }
 
 [workspace.lints.rust]
