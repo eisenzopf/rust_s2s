@@ -32,9 +32,9 @@ const ROW_TILE: usize = 4;
 pub fn dot_lanes<T: Float>(a: &[T], b: &[T]) -> T {
     assert_eq!(a.len(), b.len(), "dot_lanes: length mismatch");
     let mut acc = [T::zero(); LANES];
-    let mut ca = a.chunks_exact(LANES);
-    let mut cb = b.chunks_exact(LANES);
-    for (xa, xb) in (&mut ca).zip(&mut cb) {
+    let (ca, ra) = a.as_chunks::<LANES>();
+    let (cb, rb) = b.as_chunks::<LANES>();
+    for (xa, xb) in ca.iter().zip(cb) {
         for l in 0..LANES {
             acc[l] = acc[l] + xa[l] * xb[l];
         }
@@ -47,7 +47,7 @@ pub fn dot_lanes<T: Float>(a: &[T], b: &[T]) -> T {
         width /= 2;
     }
     let mut tail = T::zero();
-    for (&x, &y) in ca.remainder().iter().zip(cb.remainder()) {
+    for (&x, &y) in ra.iter().zip(rb) {
         tail = tail + x * y;
     }
     acc[0] + tail

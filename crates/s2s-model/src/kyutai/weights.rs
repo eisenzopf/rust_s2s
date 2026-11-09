@@ -175,19 +175,27 @@ pub fn bf16_to_f32(h: u16) -> f32 {
 fn convert(dtype: StoredDtype, raw: &[u8]) -> Vec<f32> {
     match dtype {
         StoredDtype::F32 => raw
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect(),
         StoredDtype::BF16 => raw
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| bf16_to_f32(u16::from_le_bytes([c[0], c[1]])))
             .collect(),
         StoredDtype::F16 => raw
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| f16_to_f32(u16::from_le_bytes([c[0], c[1]])))
             .collect(),
         StoredDtype::F64 => raw
-            .chunks_exact(8)
+            .as_chunks::<8>()
+            .0
+            .iter()
             .map(|c| f64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]) as f32)
             .collect(),
     }

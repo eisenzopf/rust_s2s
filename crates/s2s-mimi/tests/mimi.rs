@@ -50,14 +50,18 @@ impl RefIo {
 
     fn f32s(&self, name: &str) -> Vec<f32> {
         let (_, raw) = self.raw(name, Dtype::F32);
-        raw.chunks_exact(4)
+        raw.as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect()
     }
 
     fn f64s(&self, name: &str) -> Vec<f64> {
         let (_, raw) = self.raw(name, Dtype::F64);
-        raw.chunks_exact(8)
+        raw.as_chunks::<8>()
+            .0
+            .iter()
             .map(|c| f64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]))
             .collect()
     }
@@ -71,7 +75,9 @@ impl RefIo {
     fn codes(&self, name: &str) -> Codes {
         let (shape, raw) = self.raw(name, Dtype::U32);
         let v = raw
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect();
         Codes::new(shape[1], shape[2], v).unwrap()

@@ -69,7 +69,9 @@ impl<'a> Cur<'a> {
             .checked_mul(4)
             .ok_or_else(|| fmt_err(format!("{}: length overflow", self.what)))?;
         let s = self.bytes(len)?;
-        Ok(s.chunks_exact(4)
+        Ok(s.as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect())
     }

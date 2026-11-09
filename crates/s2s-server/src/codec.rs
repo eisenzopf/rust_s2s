@@ -112,7 +112,9 @@ pub fn s16le_to_f32(bytes: &[u8], out: &mut Vec<f32>) -> Result<usize, CodecErro
     }
     out.extend(
         bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|b| f32::from(i16::from_le_bytes([b[0], b[1]])) / 32768.0),
     );
     Ok(bytes.len() / 2)
@@ -128,7 +130,7 @@ pub fn f32le_to_f32(bytes: &[u8], out: &mut Vec<f32>) -> Result<usize, CodecErro
             sample_bytes: 4,
         });
     }
-    out.extend(bytes.chunks_exact(4).map(|b| {
+    out.extend(bytes.as_chunks::<4>().0.iter().map(|b| {
         let x = f32::from_le_bytes([b[0], b[1], b[2], b[3]]);
         if x.is_finite() {
             x.clamp(-1.0, 1.0)
