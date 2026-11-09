@@ -25,3 +25,6 @@ rustc-ice-*.txt
 
 # CUDA toolkit tree from scripts/fetch-cuda-wheels.sh
 .cuda-wheels/
+
+# Claude Code agent worktrees (local only)
+.claude/worktrees/
