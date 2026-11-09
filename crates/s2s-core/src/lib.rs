@@ -8,6 +8,7 @@
 //! - [`Float`]: the float trait the CPU reference kernels are generic over
 //!   (so gradient checks can run in `f64` while normal tests run in `f32`).
 //! - [`SplitMix64`]: a tiny deterministic RNG for tests and weight init.
+//! - [`streams`]: the per-frame token layout (stream order, delays, audio constants, special token names).
 //! - [`Error`] / [`Result`].
 
 #![forbid(unsafe_code)]
@@ -17,6 +18,7 @@ mod error;
 mod float;
 mod rng;
 mod shape;
+pub mod streams;
 mod tensor;
 
 pub use dtype::DType;
