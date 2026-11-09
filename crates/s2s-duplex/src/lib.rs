@@ -14,6 +14,8 @@
 //!   [`DuplexModel::feed_injection`] and [`DuplexModel::sample_next`], with a
 //!   per-sub-step hook for grammar masks (tool calls) and forced tokens
 //!   (STT/TTS modes).
+//! - [`train`] is the training driver behind the `s2s-duplex-train` binary:
+//!   shards in, AdamW with a schedule, checkpoints with exact resume.
 //!
 //! Positions follow `s2s-data`'s assembly exactly: the token at position `p`
 //! predicts the generated streams of position `p + 1`; injected text is never
@@ -28,6 +30,7 @@
 mod config;
 mod model;
 pub mod stream;
+pub mod train;
 
 pub use config::DuplexConfig;
 pub use model::{DuplexBatch, DuplexCtx, DuplexModel, LossReport};

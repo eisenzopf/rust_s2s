@@ -1931,11 +1931,13 @@ dependencies = [
 name = "s2s-duplex"
 version = "0.1.0"
 dependencies = [
+ "clap",
  "s2s-core",
  "s2s-data",
  "s2s-kernels",
  "s2s-nn",
  "s2s-train",
+ "serde_json",
 ]
 
 [[package]]

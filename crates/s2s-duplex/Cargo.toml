@@ -12,9 +12,9 @@ s2s-core.workspace = true
 s2s-kernels.workspace = true
 s2s-nn.workspace = true
 s2s-data.workspace = true
-
-[dev-dependencies]
 s2s-train.workspace = true
+serde_json.workspace = true
+clap.workspace = true
 
 [lints]
 workspace = true
