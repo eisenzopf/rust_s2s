@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/s2s-core", "crates/s2s-kernels"]
+members = ["crates/s2s-core", "crates/s2s-kernels", "crates/s2s-server"]
 # cuda-oxide crate: own toolchain (Rust 1.99.1), built with `cargo oxide`.
 exclude = ["crates/s2s-simt"]
 
