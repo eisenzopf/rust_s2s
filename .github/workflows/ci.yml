@@ -29,7 +29,8 @@ jobs:
 
   # cuTile Rust kernels: build against CUDA headers from NVIDIA's PyPI wheels,
   # lower to Tile IR and assemble cubins with tileiras for sm_80/89/90/100.
-  # No GPU needed; GPU parity tests stay #[ignore]d here.
+  # Also builds and lints the cudarc wrappers (s2s-cuda: cuBLASLt, NCCL,
+  # cuTile interop). No GPU needed; GPU tests stay #[ignore]d here.
   cuda-compile:
     runs-on: ubuntu-24.04
     steps:
@@ -52,7 +53,11 @@ jobs:
           echo "CUDA_TOOLKIT_PATH=$root" >> "$GITHUB_ENV"
           echo "$root/bin" >> "$GITHUB_PATH"
           echo "LD_LIBRARY_PATH=$root/lib" >> "$GITHUB_ENV"
-      - run: cargo clippy --workspace --all-targets --features s2s-kernels/cuda -- -D warnings
+      - run: cargo clippy --workspace --all-targets --features s2s-kernels/cuda,s2s-cuda/cuda -- -D warnings
+      # cudarc wrappers (cuBLASLt, NCCL, cuTile interop): build and run the
+      # CPU-side tests; the GPU tests are #[ignore]d.
+      - run: cargo build -p s2s-cuda --features cuda
+      - run: cargo test -p s2s-cuda --features cuda
       - name: cuTile kernels → Tile IR → cubin
         run: cargo test -p s2s-kernels --features cuda
         env:

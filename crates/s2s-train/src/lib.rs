@@ -9,11 +9,19 @@
 //! - [`data::CharCorpus`]: a tiny character-level corpus with a resumable,
 //!   seeded batch sampler, for trainer bring-up on CPU.
 //! - [`trainer`]: a minimal loop tying these together for the transformer LM.
+//! - [`comm`]: the [`comm::Communicator`] trait (all-reduce, reduce-scatter,
+//!   all-gather, broadcast, barrier) and [`comm::ThreadComm`], which runs N
+//!   ranks as threads of one process.
+//! - [`dist`]: data parallelism over a communicator: DDP with bucketed
+//!   all-reduce, ZeRO-1 optimizer-state sharding, and sharded checkpoints that
+//!   resume at any world size.
 
 #![forbid(unsafe_code)]
 
 pub mod checkpoint;
+pub mod comm;
 pub mod data;
+pub mod dist;
 pub mod optim;
 pub mod schedule;
 pub mod trainer;

@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use s2s_nn::{Module, Param};
 
+use crate::comm::CommError;
 use crate::data::DataCursor;
 use crate::optim::{AdamW, Moments};
 use crate::schedule::LrSchedule;
@@ -46,6 +47,8 @@ pub enum CheckpointError {
     Format(String),
     /// The checkpoint does not match the model.
     Mismatch(String),
+    /// A collective failed while saving or loading from a data-parallel group.
+    Comm(CommError),
 }
 
 impl std::fmt::Display for CheckpointError {
@@ -54,11 +57,18 @@ impl std::fmt::Display for CheckpointError {
             CheckpointError::Io(e) => write!(f, "checkpoint I/O: {e}"),
             CheckpointError::Format(e) => write!(f, "checkpoint format: {e}"),
             CheckpointError::Mismatch(e) => write!(f, "checkpoint mismatch: {e}"),
+            CheckpointError::Comm(e) => write!(f, "checkpoint: {e}"),
         }
     }
 }
 
 impl std::error::Error for CheckpointError {}
+
+impl From<CommError> for CheckpointError {
+    fn from(e: CommError) -> Self {
+        CheckpointError::Comm(e)
+    }
+}
 
 impl From<std::io::Error> for CheckpointError {
     fn from(e: std::io::Error) -> Self {

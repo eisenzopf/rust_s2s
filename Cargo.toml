@@ -8,6 +8,7 @@ members = [
     "crates/s2s-tools",
     "crates/s2s-data",
     "crates/s2s-server",
+    "crates/s2s-cuda",
 ]
 # cuda-oxide crate: own toolchain (Rust 1.99.1), built with `cargo oxide`.
 exclude = ["crates/s2s-simt"]
@@ -25,6 +26,7 @@ s2s-core = { path = "crates/s2s-core" }
 s2s-kernels = { path = "crates/s2s-kernels", default-features = false }
 s2s-nn = { path = "crates/s2s-nn" }
 s2s-tools = { path = "crates/s2s-tools" }
+s2s-train = { path = "crates/s2s-train" }
 safetensors = "0.7"
 num-traits = "0.2"
 # Data pipeline (s2s-data).
@@ -41,6 +43,12 @@ tempfile = "3"
 # share one runtime to run on the same streams and buffers. See ADR 0001.
 cutile = { git = "https://github.com/NVIDIA/cuda-rust", rev = "367bc0f8e671070e00eebc7e5498f3e8eebefc72" }
 cutile-ir = { git = "https://github.com/NVIDIA/cuda-rust", rev = "367bc0f8e671070e00eebc7e5498f3e8eebefc72" }
+# cuBLASLt and NCCL for s2s-cuda (feature `cuda`). Dynamic loading: nothing is
+# linked at build time, so it builds without CUDA libraries or a GPU, and the
+# libraries are opened at first use. CUDA 13.0 bindings (driver R580+, same
+# floor as cuTile).
+cudarc = { version = "0.19.10", default-features = false, features = ["std", "driver", "cublaslt", "nccl", "f16", "dynamic-loading", "cuda-13000"] }
+half = "2"
 cutile-compiler = { git = "https://github.com/NVIDIA/cuda-rust", rev = "367bc0f8e671070e00eebc7e5498f3e8eebefc72" }
 
 [workspace.lints.rust]
