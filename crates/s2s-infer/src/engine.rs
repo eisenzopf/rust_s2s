@@ -9,7 +9,7 @@ use s2s_data::TextTokenizer;
 use s2s_duplex::stream::{DuplexState, SubstepHook};
 use s2s_duplex::DuplexModel;
 use s2s_kernels::reference::sampling::{apply_token_bitmask, sample, SamplingParams};
-use s2s_server::protocol::ToolState;
+use s2s_server::protocol::{ToolState, TurnEvent};
 use s2s_server::{Engine, EngineError, EngineEvent, FrameInput, FrameOutput, Mode, SessionConfig};
 use s2s_tools::{
     CallId, DefaultPromptRenderer, Executor, ExecutorConfig, ExecutorEvent, InjectionConfig,
@@ -117,6 +117,43 @@ struct Session {
     tts_forcing: VecDeque<u32>,
     /// Injections to feed after the next row.
     pending: Vec<Vec<u32>>,
+    /// Turn tracking for the user (input energy) and the assistant (text).
+    user_turn: TurnTracker,
+    asst_turn: TurnTracker,
+}
+
+/// Frames of inactivity before a speaker counts as stopped (~0.5 s).
+const TURN_HANGOVER_FRAMES: u32 = 6;
+/// RMS level above which a user frame counts as speech.
+const USER_SPEECH_RMS: f32 = 0.02;
+
+/// Started/stopped detection with a hangover: active frames start a turn,
+/// and `TURN_HANGOVER_FRAMES` inactive frames in a row end it.
+#[derive(Debug, Default)]
+struct TurnTracker {
+    speaking: bool,
+    quiet: u32,
+}
+
+impl TurnTracker {
+    /// Update with this frame's activity; returns `Some(true)` on a start
+    /// and `Some(false)` on a stop.
+    fn update(&mut self, active: bool) -> Option<bool> {
+        if active {
+            self.quiet = 0;
+            if !self.speaking {
+                self.speaking = true;
+                return Some(true);
+            }
+        } else if self.speaking {
+            self.quiet += 1;
+            if self.quiet >= TURN_HANGOVER_FRAMES {
+                self.speaking = false;
+                return Some(false);
+            }
+        }
+        None
+    }
 }
 
 /// The duplex model as a frame-synchronous engine.
@@ -259,6 +296,18 @@ impl<K: Tokenizer> DuplexEngine<K> {
             }
         }
 
+        // Turn events: the user by input energy (a simple VAD; the model's own
+        // turn-taking is learned, this is only for client UIs and metrics).
+        if s.mode != Mode::Tts {
+            let rms =
+                (input.audio.iter().map(|x| x * x).sum::<f32>() / FRAME_SAMPLES as f32).sqrt();
+            match s.user_turn.update(rms > USER_SPEECH_RMS) {
+                Some(true) => out.events.push(EngineEvent::Turn(TurnEvent::UserStarted)),
+                Some(false) => out.events.push(EngineEvent::Turn(TurnEvent::UserStopped)),
+                None => {}
+            }
+        }
+
         // 1. User audio into the delayed domain.
         let silence = s.codec.silence_codes();
         let user_codes = if s.mode == Mode::Tts {
@@ -290,6 +339,21 @@ impl<K: Tokenizer> DuplexEngine<K> {
             audio: &self.cfg.audio_sampling,
         };
         let generated = self.model.sample_next(&mut s.state, &mut chooser);
+
+        // The assistant by text activity: any non-pad token on its text slots.
+        let asst_active = (0..m).any(|slot| {
+            let t = generated[l.index(StreamKind::AssistantText(slot))];
+            t != self.ids.pad
+        });
+        match s.asst_turn.update(asst_active) {
+            Some(true) => out
+                .events
+                .push(EngineEvent::Turn(TurnEvent::AssistantStarted)),
+            Some(false) => out
+                .events
+                .push(EngineEvent::Turn(TurnEvent::AssistantStopped)),
+            None => {}
+        }
 
         // 3. Events from the text streams.
         let tu = generated[l.index(StreamKind::UserText)];
@@ -561,6 +625,8 @@ impl<K: Tokenizer> Engine for DuplexEngine<K> {
             tts_words: VecDeque::new(),
             tts_forcing: VecDeque::new(),
             pending: Vec::new(),
+            user_turn: TurnTracker::default(),
+            asst_turn: TurnTracker::default(),
         };
         self.sessions.insert(id, session);
         Ok(())
@@ -594,7 +660,25 @@ impl<K: Tokenizer> Engine for DuplexEngine<K> {
 
 #[cfg(test)]
 mod tests {
-    use super::Utf8Buf;
+    use super::{TurnTracker, Utf8Buf, TURN_HANGOVER_FRAMES};
+
+    #[test]
+    fn turn_tracker_starts_and_stops_with_hangover() {
+        let mut t = TurnTracker::default();
+        assert_eq!(t.update(false), None);
+        assert_eq!(t.update(true), Some(true));
+        assert_eq!(t.update(true), None);
+        for _ in 0..TURN_HANGOVER_FRAMES - 1 {
+            assert_eq!(t.update(false), None);
+        }
+        // A brief pause shorter than the hangover does not end the turn.
+        assert_eq!(t.update(true), None);
+        for _ in 0..TURN_HANGOVER_FRAMES - 1 {
+            assert_eq!(t.update(false), None);
+        }
+        assert_eq!(t.update(false), Some(false));
+        assert_eq!(t.update(false), None);
+    }
 
     #[test]
     fn utf8_assembly_waits_for_complete_characters() {

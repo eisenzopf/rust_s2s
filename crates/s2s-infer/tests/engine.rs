@@ -364,3 +364,35 @@ fn engine_rejects_a_codec_with_the_wrong_codebook_size() {
     let err = e.open_session(4, &SessionConfig::default()).unwrap_err();
     assert!(err.to_string().contains("entries per codebook"), "{err}");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_events_follow_user_audio_and_assistant_text() {
+    let tok = ByteTokenizer;
+    let id = move |n| TextTokenizer::special_id(&tok, n).unwrap();
+    // The assistant writes "hello there" (11 tokens, ~3 frames), then pads.
+    let tm = Mutex::new(Some(TextTokenizer::encode(&tok, "hello there")));
+    let mut e = engine().with_hook_factory(move |_| {
+        Box::new(Scripted {
+            tm: tm.lock().unwrap().take().unwrap_or_default().into(),
+            pad: id(special::PAD),
+            layout: StreamLayout::default(),
+            masked_steps: Arc::new(Mutex::new(0)),
+        })
+    });
+    e.open_session(5, &SessionConfig::default()).unwrap();
+    // User speaks for 5 frames, then silence.
+    let mut events = run_frames(&mut e, 5, 0..5, 0.3);
+    events.extend(run_frames(&mut e, 5, 5..20, 0.0));
+    let turns: Vec<_> = events
+        .iter()
+        .filter_map(|ev| match ev {
+            EngineEvent::Turn(t) => Some(*t),
+            _ => None,
+        })
+        .collect();
+    use s2s_server::protocol::TurnEvent::*;
+    assert_eq!(
+        turns,
+        [UserStarted, AssistantStarted, AssistantStopped, UserStopped]
+    );
+}
