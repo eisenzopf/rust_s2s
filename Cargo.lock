@@ -1657,6 +1657,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "s2s-infer"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "s2s-core",
+ "s2s-data",
+ "s2s-duplex",
+ "s2s-kernels",
+ "s2s-server",
+ "s2s-tools",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite 0.28.0",
+]
+
+[[package]]
 name = "s2s-kernels"
 version = "0.1.0"
 dependencies = [

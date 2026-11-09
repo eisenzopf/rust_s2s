@@ -9,6 +9,7 @@ members = [
     "crates/s2s-data",
     "crates/s2s-server",
     "crates/s2s-duplex",
+    "crates/s2s-infer",
 ]
 # cuda-oxide crate: own toolchain (Rust 1.99.1), built with `cargo oxide`.
 exclude = ["crates/s2s-simt"]
@@ -64,4 +65,6 @@ opt-level = 3
 [profile.dev.package.s2s-train]
 opt-level = 3
 [profile.dev.package.s2s-duplex]
+opt-level = 3
+[profile.dev.package.s2s-infer]
 opt-level = 3
