@@ -134,3 +134,29 @@ fn loss_starts_near_log_vocab() {
         "initial loss {loss} vs ln(V) {expected}"
     );
 }
+
+#[test]
+fn streaming_step_matches_full_forward() {
+    use s2s_nn::attention::KvCache;
+    let mut cfg = tiny();
+    cfg.n_layers = 2;
+    let model = TransformerLm::<f64>::new(cfg, &mut SplitMix64::new(31));
+    let seq = 9;
+    let tokens: Vec<u32> = (0..seq as u32).map(|i| (i * 3) % 7).collect();
+    let full = model.logits(&tokens, 1, seq);
+
+    // Embed, then run blocks step by step with per-layer caches.
+    let mut caches: Vec<KvCache<f64>> = (0..cfg.n_layers).map(|_| KvCache::new()).collect();
+    for (t, &tok) in tokens.iter().enumerate() {
+        let mut h = model.embed.forward(&[tok], 1).0;
+        for (b, c) in model.blocks.iter().zip(caches.iter_mut()) {
+            h = b.step(&h, t as i64, c);
+        }
+        let h = model.norm.forward(&h).0;
+        let logits = model.head.forward(&h, 1).0;
+        for (a, b) in logits.iter().zip(&full[t * cfg.vocab..(t + 1) * cfg.vocab]) {
+            assert!((a - b).abs() < 1e-10, "position {t}: {a} vs {b}");
+        }
+    }
+    assert_eq!(caches[0].len(), seq);
+}

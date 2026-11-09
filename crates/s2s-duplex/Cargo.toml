@@ -1,0 +1,20 @@
+[package]
+name = "s2s-duplex"
+description = "Our full-duplex multistream model (plan §3): a Temporal Transformer over the per-frame stream layout plus a Depth Transformer, with training forward/backward and streaming inference."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+s2s-core.workspace = true
+s2s-kernels.workspace = true
+s2s-nn.workspace = true
+s2s-data.workspace = true
+
+[dev-dependencies]
+s2s-train.workspace = true
+
+[lints]
+workspace = true

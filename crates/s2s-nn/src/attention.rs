@@ -39,6 +39,40 @@ pub struct Attention<T> {
     cfg: AttentionConfig,
 }
 
+/// Per-layer key/value cache for streaming inference (batch 1).
+///
+/// Keys are stored after RoPE, row-major `[len, kv_heads, head_dim]`.
+/// Everything is kept; a sliding-window mask in the config limits what each
+/// query sees. (Evicting rows outside the window, and a ring buffer like the
+/// GPU `kv_ring_write` kernel, is a memory optimization for later.)
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct KvCache<T> {
+    k: Vec<T>,
+    v: Vec<T>,
+    len: usize,
+}
+
+impl<T> KvCache<T> {
+    /// An empty cache.
+    pub fn new() -> Self {
+        Self {
+            k: Vec::new(),
+            v: Vec::new(),
+            len: 0,
+        }
+    }
+
+    /// Cached positions.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Whether nothing is cached yet.
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
 /// Saved values for the backward pass.
 #[derive(Clone, Debug)]
 pub struct AttentionCtx<T> {
@@ -157,6 +191,38 @@ impl<T: Float> Attention<T> {
             seq,
         };
         (y, ctx)
+    }
+
+    /// Streaming step for one new token (batch 1): appends its key/value to
+    /// `cache` and attends over everything cached so far. `x` is `[d_model]`;
+    /// returns `[d_model]`. Equivalent to the last row of [`forward`] over the
+    /// whole sequence.
+    ///
+    /// [`forward`]: Self::forward
+    pub fn step(&self, x: &[T], position: i64, cache: &mut KvCache<T>) -> Vec<T> {
+        let (hq, hkv, hd) = (self.cfg.q_heads, self.cfg.kv_heads, self.cfg.head_dim);
+        let (mut q, _) = self.wq.forward(x, 1);
+        let (mut k, _) = self.wk.forward(x, 1);
+        let (v, _) = self.wv.forward(x, 1);
+        rope::rope_fwd(&mut q, &[position], 1, hq, hd, self.cfg.rope);
+        rope::rope_fwd(&mut k, &[position], 1, hkv, hd, self.cfg.rope);
+        cache.k.extend_from_slice(&k);
+        cache.v.extend_from_slice(&v);
+        cache.len += 1;
+        let s = cache.len;
+        let kc = bthd_to_bhtd(&cache.k, 1, s, hkv, hd);
+        let vc = bthd_to_bhtd(&cache.v, 1, s, hkv, hd);
+        let p = AttnParams {
+            t: 1,
+            s,
+            q_offset: s - 1,
+            ..self.params(1, 1)
+        };
+        let mut o = vec![T::zero(); hq * hd];
+        let mut lse = vec![T::zero(); hq];
+        attn::attention_fwd(&p, &q, &kc, &vc, &mut o, &mut lse);
+        // o is [1, hq, 1, hd] == [hq * hd] row-major, same as [1, 1, hq, hd].
+        self.wo.forward(&o, 1).0
     }
 
     /// Backward: accumulates parameter gradients, returns `dx`.

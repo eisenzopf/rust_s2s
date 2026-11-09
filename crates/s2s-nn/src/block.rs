@@ -2,7 +2,7 @@
 
 use s2s_core::{Float, SplitMix64};
 
-use crate::attention::{Attention, AttentionConfig, AttentionCtx};
+use crate::attention::{Attention, AttentionConfig, AttentionCtx, KvCache};
 use crate::mlp::{MlpCtx, SwiGluMlp};
 use crate::norm::{RmsNorm, RmsNormCtx};
 use crate::util::add_assign;
@@ -132,6 +132,19 @@ impl<T: Float> Block<T> {
             },
         };
         (y, ctx)
+    }
+
+    /// Streaming step for one new token (batch 1), using and extending
+    /// `cache`. `x` is `[d_model]`.
+    pub fn step(&self, x: &[T], position: i64, cache: &mut KvCache<T>) -> Vec<T> {
+        let h1 = self.norm1.forward(x).0;
+        let a = self.attn.step(&h1, position, cache);
+        let mut x2 = x.to_vec();
+        add_assign(&mut x2, &a);
+        let h2 = self.norm2.forward(&x2).0;
+        let m = self.mlp.forward(&h2, 1).0;
+        add_assign(&mut x2, &m);
+        x2
     }
 
     /// Backward: accumulates parameter gradients, returns `dx`.

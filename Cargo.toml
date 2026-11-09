@@ -8,6 +8,7 @@ members = [
     "crates/s2s-tools",
     "crates/s2s-data",
     "crates/s2s-server",
+    "crates/s2s-duplex",
 ]
 # cuda-oxide crate: own toolchain (Rust 1.99.1), built with `cargo oxide`.
 exclude = ["crates/s2s-simt"]
@@ -25,6 +26,8 @@ s2s-core = { path = "crates/s2s-core" }
 s2s-kernels = { path = "crates/s2s-kernels", default-features = false }
 s2s-nn = { path = "crates/s2s-nn" }
 s2s-tools = { path = "crates/s2s-tools" }
+s2s-data = { path = "crates/s2s-data" }
+s2s-train = { path = "crates/s2s-train" }
 safetensors = "0.7"
 num-traits = "0.2"
 # Data pipeline (s2s-data).
@@ -59,4 +62,6 @@ opt-level = 3
 opt-level = 3
 # Generic layer/kernel code is compiled in the crate that instantiates it.
 [profile.dev.package.s2s-train]
+opt-level = 3
+[profile.dev.package.s2s-duplex]
 opt-level = 3
