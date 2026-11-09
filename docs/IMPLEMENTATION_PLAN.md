@@ -387,8 +387,8 @@ All CUDA Rust crates are pinned to **one git revision** of `NVIDIA/cuda-rust`, s
 ### 7.2 Kernel inventory
 
 Status: every kernel below already has its CPU reference (`s2s-kernels::reference`), with a passing gradient check where it has a backward pass. GPU versions written so far are all f32, compile-checked to cubins, and **not yet run on a GPU**:
-- **cuTile:** #2 RMSNorm fwd, #4 SwiGLU fwd.
-- **cuda-oxide:** #7 embedding gather-sum fwd and atomic scatter-add bwd, #14 token-bitmask mask, #20 delays.
+- **cuTile:** #2 RMSNorm fwd and bwd (plus a column-sum reduction for `dw`), #4 SwiGLU fwd, #8 fused weighted cross-entropy fwd+bwd, #9 softmax, #10 AdamW.
+- **cuda-oxide:** #7 embedding gather-sum fwd and atomic scatter-add bwd, #12 KV-cache ring write, #13 greedy argmax (warp per row), #14 token-bitmask mask, #20 delays.
 
 Each kernel ships with:
 - a CPU reference implementation,
@@ -689,6 +689,11 @@ flowchart LR
 - **Why it matters:** this proves the whole streaming design, the codec, the KV cache and the server before we spend anything on training.
 
 ### M5 — Backward kernels, layers and single-GPU trainer (L)
+
+> **Status (2026-11-09): CPU half done.**
+> - **Built:** `s2s-nn` (layers with explicit backward, activation checkpointing, transformer LM) and `s2s-train` (AdamW with parameter groups and clipping, warmup-cosine / WSD schedules, safetensors checkpoints, gradient accumulation).
+> - **Verified on CPU:** a whole-model f64 gradient check passes; a tiny model learns a text corpus; resume from checkpoint is bit-exact.
+> - **Remaining:** run the same layers on GPU kernels, and a PyTorch loss-curve comparison.
 
 - Backward for #1–5, #7–10; explicit layer backward; activation checkpointing; AdamW; LR schedules; checkpoints.
 - **Exit:**
