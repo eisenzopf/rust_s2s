@@ -35,7 +35,7 @@
 <body>
 <main>
   <h1>s2s-server client</h1>
-  <p id="status">Disconnected. Use headphones: the development engine echoes your voice.</p>
+  <p id="status">Disconnected. Use headphones, or the model hears its own voice (the development engine echoes yours).</p>
 
   <fieldset>
     <legend>Session</legend>
@@ -53,7 +53,7 @@
     </div>
     <label>System prompt <textarea id="prompt" rows="2">You are a helpful voice assistant.</textarea></label>
     <label>Tools (JSON array of schemas)
-      <textarea id="tools" rows="4">[{"name":"get_weather","description":"Current weather for a city","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}]</textarea>
+      <textarea id="tools" rows="4" placeholder='Empty for models without tool calling (e.g. Moshi). Example: [{"name":"get_weather","description":"Current weather for a city","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}]'></textarea>
     </label>
   </fieldset>
 
