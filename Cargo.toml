@@ -6,6 +6,7 @@ members = [
     "crates/s2s-nn",
     "crates/s2s-train",
     "crates/s2s-tools",
+    "crates/s2s-data",
 ]
 # cuda-oxide crate: own toolchain (Rust 1.99.1), built with `cargo oxide`.
 exclude = ["crates/s2s-simt"]
@@ -19,12 +20,18 @@ repository = "https://github.com/eisenzopf/rust_s2s"
 
 [workspace.dependencies]
 s2s-core = { path = "crates/s2s-core" }
-s2s-kernels = { path = "crates/s2s-kernels" }
+# CPU only: never enable the `cuda` feature through this entry.
+s2s-kernels = { path = "crates/s2s-kernels", default-features = false }
 s2s-nn = { path = "crates/s2s-nn" }
 safetensors = "0.7"
+num-traits = "0.2"
+# Data pipeline (s2s-data).
+memmap2 = "0.9"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-num-traits = "0.2"
+crc32fast = "1.4"
+clap = { version = "4.5", features = ["derive"] }
+tempfile = "3"
 # NVIDIA CUDA Rust (github.com/NVIDIA/cuda-rust, formerly NVlabs/cutile-rs and
 # NVlabs/cuda-oxide). Every CUDA Rust crate comes from this one pinned
 # revision: mixing a crates.io copy with a git copy yields two incompatible

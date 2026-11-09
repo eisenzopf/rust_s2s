@@ -1,0 +1,31 @@
+{
+  "id": "weather-001",
+  "license": "CC-BY-4.0",
+  "user_speaker": "spk_17",
+  "assistant_speaker": "assistant_v1",
+  "system": "You are a helpful voice assistant.",
+  "tools": [
+    {
+      "name": "get_weather",
+      "parameters": {"type": "object", "properties": {"city": {"type": "string"}, "unit": {"type": "string"}}}
+    }
+  ],
+  "seed": 7,
+  "turns": [
+    {"speaker": "user", "text": "what's the weather in Paris?", "start": {"at": 0.2}, "duration": 1.6},
+    {
+      "speaker": "assistant",
+      "text": "Let me check.",
+      "start": {"after": 0.3},
+      "duration": 0.8,
+      "tool_call": {
+        "name": "get_weather",
+        "arguments": {"city": "Paris", "unit": "celsius"},
+        "result": {"temp": 18, "conditions": "sunny"},
+        "latency": 1.2
+      }
+    },
+    {"speaker": "user", "text": "mm-hmm", "start": {"with_previous": 0.4}, "duration": 0.3, "backchannel": true},
+    {"speaker": "assistant", "text": "It's 18 degrees and sunny in Paris.", "start": {"after_tool_result": 0.3}, "duration": 2.0}
+  ]
+}
