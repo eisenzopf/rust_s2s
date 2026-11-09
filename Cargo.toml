@@ -7,6 +7,7 @@ members = [
     "crates/s2s-train",
     "crates/s2s-tools",
     "crates/s2s-data",
+    "crates/s2s-server",
 ]
 # cuda-oxide crate: own toolchain (Rust 1.99.1), built with `cargo oxide`.
 exclude = ["crates/s2s-simt"]

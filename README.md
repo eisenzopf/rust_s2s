@@ -13,8 +13,12 @@ A full-duplex speech-to-speech model (STT + LLM + TTS + tool calling fused into 
 |---|---|---|
 | `crates/s2s-core` | dtypes, shapes, host tensors, deterministic RNG | stable (1.89+) |
 | `crates/s2s-kernels` | CPU reference kernels, forward + backward, with finite-difference gradient checks; dense GPU kernels in **cuTile Rust** behind feature `cuda` | stable (1.89+) |
+| `crates/s2s-nn` | layers with explicit forward/backward (Linear, RMSNorm, GQA attention + RoPE, SwiGLU, multi-stream embedding, transformer block with activation checkpointing, transformer LM); whole-model gradient checks | stable (1.89+) |
+| `crates/s2s-train` | AdamW with parameter groups and clipping, LR schedules, safetensors checkpoints with bit-exact resume, gradient accumulation; `tiny-lm` CPU demo | stable (1.89+) |
+| `crates/s2s-tools` | tool-calling runtime: registry and prompt rendering, tool-call span parser, JSON-schema-constrained decoding masks (llguidance), async executor with client-tool bridge, result injection | stable (1.89+) |
+| `crates/s2s-server` | streaming server: WebSocket protocol, Opus/PCM audio, jitter buffer, lockstep 80 ms frame clock over an `Engine` trait, `FakeEngine`, web client; `s2s-server` binary | stable (1.89+) |
 | `crates/s2s-data` | training-data pipeline (CPU): memory-mapped shard format, example assembly (delays, injection segments, targets, loss weights), deterministic resumable loader, synthetic tool-dialogue timeline assembly; `s2s-data` CLI (`synth`, `inspect`, `validate`) | stable (1.89+) |
-| `crates/s2s-simt` | sparse/irregular GPU kernels in **cuda-oxide** (bitmask, embedding gather/scatter-add, delays) plus a GPU self-test | Rust 1.99.1 + `cargo oxide` (standalone workspace) |
+| `crates/s2s-simt` | sparse/irregular GPU kernels in **cuda-oxide** (bitmask, embedding gather/scatter-add, delays, warp argmax, KV-cache ring write) plus a GPU self-test | Rust 1.99.1 + `cargo oxide` (standalone workspace) |
 | `scripts/fetch-cuda-wheels.sh` | assembles a CUDA 13.5 toolkit tree (headers, `tileiras`, `ptxas`, libNVVM) from NVIDIA's PyPI wheels; no full CUDA install needed to compile | — |
 | `scripts/check-simt.sh` | cuda-oxide kernels → PTX → cubins for sm_80/89/90/100 | — |
 

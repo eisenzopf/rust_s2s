@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>s2s-server client</title>
+<style>
+  :root { --bg: #fff; --fg: #1d1d1f; --muted: #6b6b70; --line: #d8d8dc; --accent: #2a62d4; --panel: #f6f6f8; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #161618; --fg: #ececf0; --muted: #9a9aa2; --line: #333338; --accent: #7aa2ff; --panel: #1f1f23; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, sans-serif; }
+  main { max-width: 960px; margin: 0 auto; display: grid; gap: 16px; }
+  h1 { font-size: 20px; margin: 0; }
+  fieldset { border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin: 0; display: grid; gap: 8px; }
+  legend { color: var(--muted); padding: 0 4px; }
+  label { display: grid; gap: 4px; color: var(--muted); font-size: 13px; }
+  textarea, input, select, button { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+  textarea { width: 100%; resize: vertical; font-family: ui-monospace, monospace; font-size: 13px; }
+  button { cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; }
+  .row > * { flex: 1 1 160px; }
+  .row > button { flex: 0 0 auto; }
+  .panes { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 640px) { .panes { grid-template-columns: 1fr; } }
+  .pane { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px; min-height: 120px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .pane h2 { margin: 0 0 6px; font-size: 13px; color: var(--muted); font-weight: 600; }
+  #log { font-family: ui-monospace, monospace; font-size: 12px; max-height: 280px; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+  #status { color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>s2s-server client</h1>
+  <p id="status">Disconnected. Use headphones: the development engine echoes your voice.</p>
+
+  <fieldset>
+    <legend>Session</legend>
+    <div class="row">
+      <label>Mode
+        <select id="mode">
+          <option value="s2s">s2s (speech to speech)</option>
+          <option value="stt">stt (transcribe only)</option>
+          <option value="tts">tts (speak typed text)</option>
+        </select>
+      </label>
+      <label>Voice <input id="voice" placeholder="(default)"></label>
+      <button id="start" class="primary">Start</button>
+      <button id="stop" disabled>End session</button>
+    </div>
+    <label>System prompt <textarea id="prompt" rows="2">You are a helpful voice assistant.</textarea></label>
+    <label>Tools (JSON array of schemas)
+      <textarea id="tools" rows="4">[{"name":"get_weather","description":"Current weather for a city","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}]</textarea>
+    </label>
+  </fieldset>
+
+  <fieldset>
+    <legend>Send</legend>
+    <div class="row">
+      <label>Text input (TTS text, or a typed turn; try <code>/tool get_weather {"city":"Paris"}</code>)
+        <input id="text" autocomplete="off">
+      </label>
+      <button id="sendText" disabled>Send text</button>
+    </div>
+    <div class="row">
+      <label>Tool call id <input id="callId" autocomplete="off"></label>
+      <label>Tool result JSON <input id="result" value='{"temp":18,"conditions":"sunny"}' autocomplete="off"></label>
+      <button id="sendResult" disabled>Send result</button>
+      <button id="cancelTool" disabled>Cancel call</button>
+    </div>
+  </fieldset>
+
+  <div class="panes">
+    <div class="pane"><h2>User transcript</h2><div id="userText"></div></div>
+    <div class="pane"><h2>Assistant transcript</h2><div id="assistantText"></div></div>
+  </div>
+  <div class="pane"><h2>Events</h2><div id="log"></div></div>
+</main>
+
+<script>
+"use strict";
+// Wire format (see crates/s2s-server/src/protocol.rs): JSON control messages
+// in text frames; audio in binary frames = 1 tag byte + payload, mono 24 kHz.
+// This page sends and receives PCM s16le (tag 0x02) and can also play f32le.
+const RATE = 24000, FRAME = 1920, TAG_OPUS = 0x01, TAG_S16 = 0x02, TAG_F32 = 0x03;
+const $ = (id) => document.getElementById(id);
+
+const WORKLET = `
+class Capture extends AudioWorkletProcessor {
+  process(inputs) {
+    const ch = inputs[0] && inputs[0][0];
+    if (ch) this.port.postMessage(ch.slice(0));
+    return true;
+  }
+}
+registerProcessor("capture", Capture);
+`;
+
+// Streaming linear-interpolation resampler (mic rate -> 24 kHz).
+class Resampler {
+  constructor(inRate, outRate) { this.step = inRate / outRate; this.t = 0; this.last = 0; }
+  process(input) {
+    const n = input.length, out = [];
+    let t = this.t;
+    while (t <= n - 1) {
+      const i = Math.floor(t), frac = t - i;
+      const a = i < 0 ? this.last : input[i];
+      const b = i + 1 < n ? input[i + 1] : a;
+      out.push(a + (b - a) * frac);
+      t += this.step;
+    }
+    this.t = t - n;
+    if (n > 0) this.last = input[n - 1];
+    return out;
+  }
+}
+
+let ws = null, ctx = null, mic = null, captureNode = null, resampler = null;
+let acc = new Float32Array(FRAME), accLen = 0, nextPlay = 0, live = false, warnedOpus = false;
+
+function log(text) {
+  const el = $("log");
+  const line = document.createElement("div");
+  line.textContent = text;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+}
+
+function setLive(on) {
+  live = on;
+  $("start").disabled = on;
+  $("stop").disabled = !on;
+  for (const id of ["sendText", "sendResult", "cancelTool"]) $(id).disabled = !on;
+}
+
+function send(obj) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+}
+
+function sendFrame(frame) {
+  if (!ws || ws.readyState !== WebSocket.OPEN || !live) return;
+  if (ws.bufferedAmount > (1 << 20)) return; // network stalled: drop rather than queue
+  const buf = new ArrayBuffer(1 + 2 * frame.length);
+  const dv = new DataView(buf);
+  dv.setUint8(0, TAG_S16);
+  for (let i = 0; i < frame.length; i++) {
+    const s = Math.max(-1, Math.min(1, frame[i]));
+    dv.setInt16(1 + 2 * i, Math.round(s * 32767), true);
+  }
+  ws.send(buf);
+}
+
+function onMic(samples) {
+  for (const x of resampler.process(samples)) {
+    acc[accLen++] = x;
+    if (accLen === FRAME) { sendFrame(acc); accLen = 0; }
+  }
+}
+
+function playAudio(buf) {
+  const dv = new DataView(buf);
+  const tag = dv.getUint8(0);
+  let pcm;
+  if (tag === TAG_S16) {
+    pcm = new Float32Array((buf.byteLength - 1) / 2);
+    for (let i = 0; i < pcm.length; i++) pcm[i] = dv.getInt16(1 + 2 * i, true) / 32768;
+  } else if (tag === TAG_F32) {
+    pcm = new Float32Array((buf.byteLength - 1) / 4);
+    for (let i = 0; i < pcm.length; i++) pcm[i] = dv.getFloat32(1 + 4 * i, true);
+  } else {
+    if (!warnedOpus) { warnedOpus = true; log("received Opus audio; this page only plays PCM"); }
+    return;
+  }
+  if (!pcm.length) return;
+  const ab = ctx.createBuffer(1, pcm.length, RATE);
+  ab.copyToChannel(pcm, 0);
+  const src = ctx.createBufferSource();
+  src.buffer = ab;
+  src.connect(ctx.destination);
+  const now = ctx.currentTime;
+  if (nextPlay < now + 0.01) nextPlay = now + 0.08;   // (re)start with an 80 ms cushion
+  if (nextPlay > now + 1.0) return;                   // too far behind: drop
+  src.start(nextPlay);
+  nextPlay += ab.duration;
+}
+
+function onControl(msg) {
+  switch (msg.type) {
+    case "transcript.user.delta": $("userText").textContent += msg.text; break;
+    case "transcript.assistant.delta": $("assistantText").textContent += msg.text; break;
+    case "tool.call":
+      $("callId").value = msg.call_id;
+      log(`tool.call ${msg.call_id} ${msg.name} ${JSON.stringify(msg.arguments)}`);
+      break;
+    case "tool.status": log(`tool.status ${msg.call_id} ${msg.state}`); break;
+    case "turn.event": log(`turn.event ${msg.event} @ ${msg.t}s`); break;
+    case "session.started":
+      $("status").textContent = `Session ${msg.session_id} (${msg.mode}), audio ${msg.output_format} @ ${msg.sample_rate} Hz`;
+      setLive(true);
+      log(JSON.stringify(msg));
+      break;
+    case "error": log(`error ${msg.code}: ${msg.message}`); break;
+    default: log(JSON.stringify(msg));
+  }
+}
+
+async function start() {
+  let tools;
+  try { tools = JSON.parse($("tools").value || "[]"); } catch (e) { log(`tools: ${e}`); return; }
+  $("start").disabled = true;
+  const mode = $("mode").value;
+  try {
+    ctx = new AudioContext();
+    await ctx.resume();
+    if (mode !== "tts") {
+      mic = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
+      const url = URL.createObjectURL(new Blob([WORKLET], { type: "application/javascript" }));
+      await ctx.audioWorklet.addModule(url);
+      URL.revokeObjectURL(url);
+      captureNode = new AudioWorkletNode(ctx, "capture");
+      const mute = ctx.createGain();
+      mute.gain.value = 0;
+      ctx.createMediaStreamSource(mic).connect(captureNode);
+      captureNode.connect(mute).connect(ctx.destination); // keeps the node pulled
+      resampler = new Resampler(ctx.sampleRate, RATE);
+      captureNode.port.onmessage = (ev) => onMic(ev.data);
+    }
+  } catch (e) {
+    log(`audio setup failed: ${e}`);
+    teardown();
+    return;
+  }
+
+  const scheme = location.protocol === "https:" ? "wss://" : "ws://";
+  ws = new WebSocket(scheme + location.host + "/ws");
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => {
+    const start = { type: "session.start", system_prompt: $("prompt").value, tools, mode, output_format: "pcm_s16le" };
+    if ($("voice").value) start.voice = $("voice").value;
+    send(start);
+    $("status").textContent = "Connected; starting session…";
+  };
+  ws.onmessage = (ev) => {
+    if (typeof ev.data === "string") {
+      try { onControl(JSON.parse(ev.data)); } catch (e) { log(`bad message: ${e}`); }
+    } else {
+      playAudio(ev.data);
+    }
+  };
+  ws.onerror = () => log("socket error");
+  ws.onclose = (ev) => {
+    log(`socket closed (${ev.code}${ev.reason ? " " + ev.reason : ""})`);
+    $("status").textContent = "Disconnected.";
+    teardown();
+  };
+}
+
+function teardown() {
+  setLive(false);
+  if (captureNode) { captureNode.port.onmessage = null; captureNode.disconnect(); captureNode = null; }
+  if (mic) { for (const t of mic.getTracks()) t.stop(); mic = null; }
+  if (ctx) { ctx.close(); ctx = null; }
+  accLen = 0;
+  nextPlay = 0;
+  ws = null;
+}
+
+$("start").onclick = start;
+$("stop").onclick = () => send({ type: "session.end" });
+$("sendText").onclick = () => {
+  const text = $("text").value.trim();
+  if (text) { send({ type: "text.input", text }); $("text").value = ""; }
+};
+$("text").addEventListener("keydown", (e) => { if (e.key === "Enter") $("sendText").click(); });
+$("sendResult").onclick = () => {
+  let json;
+  try { json = JSON.parse($("result").value); } catch (e) { log(`result: ${e}`); return; }
+  send({ type: "tool.result", call_id: $("callId").value, json });
+};
+$("cancelTool").onclick = () => send({ type: "session.cancel_tool", call_id: $("callId").value });
+</script>
+</body>
+</html>

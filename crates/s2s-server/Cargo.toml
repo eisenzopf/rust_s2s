@@ -1,0 +1,35 @@
+[package]
+name = "s2s-server"
+description = "Streaming media server for rust_s2s: WebSocket protocol, Opus/PCM audio at the edge, jitter buffers, and the lockstep 80 ms frame clock that batches every session into one engine step."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "s2s-server"
+path = "src/main.rs"
+
+[dependencies]
+s2s-core.workspace = true
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "ws"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+# Safe bindings to libopus. Its `audiopus_sys` dependency builds the bundled
+# libopus source with cmake when no system libopus is found, so no system
+# package is needed (only cmake and a C compiler at build time).
+opus = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal"] }
+tokio-util = { version = "0.7", default-features = false }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "ansi"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
+tokio-tungstenite = "0.28"
+
+[lints]
+workspace = true
