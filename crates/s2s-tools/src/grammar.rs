@@ -215,6 +215,73 @@ fn bound_numbers(schema: &mut Value, limit: u64) {
     }
 }
 
+/// Render a tool call exactly as the grammar lets the model write it:
+/// `{"name": …, "arguments": {…}}` with `style`'s separators, `name` before
+/// `arguments`, and object keys in the order the tool's JSON Schema lists
+/// them under `properties` (keys the schema doesn't list follow, in their
+/// given order).
+///
+/// Training data must use this, so the model learns the one serialization
+/// it will be allowed to produce at inference. `parameters` is the tool's
+/// parameter schema (`ToolSpec::parameters`), if known.
+pub fn render_tool_call(
+    name: &str,
+    arguments: &Value,
+    parameters: Option<&Value>,
+    style: &JsonStyle,
+) -> String {
+    let mut out = String::from("{");
+    out.push_str(&Value::String("name".into()).to_string());
+    out.push_str(&style.key_separator);
+    out.push_str(&Value::String(name.into()).to_string());
+    out.push_str(&style.item_separator);
+    out.push_str(&Value::String("arguments".into()).to_string());
+    out.push_str(&style.key_separator);
+    render_value(arguments, parameters, style, &mut out);
+    out.push('}');
+    out
+}
+
+fn render_value(v: &Value, schema: Option<&Value>, style: &JsonStyle, out: &mut String) {
+    match v {
+        Value::Array(items) => {
+            out.push('[');
+            let item_schema = schema.and_then(|s| s.get("items"));
+            for (i, x) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(&style.item_separator);
+                }
+                render_value(x, item_schema, style, out);
+            }
+            out.push(']');
+        }
+        Value::Object(map) => {
+            let props = schema
+                .and_then(|s| s.get("properties"))
+                .and_then(Value::as_object);
+            let mut keys: Vec<&String> = Vec::with_capacity(map.len());
+            if let Some(props) = props {
+                keys.extend(props.keys().filter(|k| map.contains_key(*k)));
+            }
+            keys.extend(
+                map.keys()
+                    .filter(|k| !props.is_some_and(|p| p.contains_key(*k))),
+            );
+            out.push('{');
+            for (i, k) in keys.into_iter().enumerate() {
+                if i > 0 {
+                    out.push_str(&style.item_separator);
+                }
+                out.push_str(&Value::String(k.clone()).to_string());
+                out.push_str(&style.key_separator);
+                render_value(&map[k], props.and_then(|p| p.get(k)), style, out);
+            }
+            out.push('}');
+        }
+        scalar => out.push_str(&scalar.to_string()),
+    }
+}
+
 /// The JSON Schema a span must match: one `anyOf` branch per tool.
 pub fn tool_call_schema(registry: &ToolRegistry) -> Value {
     let branches: Vec<Value> = registry
@@ -681,6 +748,105 @@ mod tests {
         .unwrap();
         let err = ToolCallGrammar::new(&reg, tok, GrammarConfig::default()).unwrap_err();
         assert!(matches!(err, GrammarError::Engine(_)), "{err}");
+    }
+
+    fn walk(g: &Arc<ToolCallGrammar>, tok: &ByteTokenizer, text: &str) {
+        let ids = g.special_ids();
+        let mut m = g.start();
+        for t in tok.tokenize(text.as_bytes()) {
+            let mask = m.compute_mask().unwrap();
+            assert!(
+                allowed(&mask, t),
+                "{text}: token {:?} not allowed",
+                tok.token(t)
+            );
+            assert_eq!(m.consume(t).unwrap(), SpanState::Open);
+        }
+        let mask = m.compute_mask().unwrap();
+        assert!(
+            allowed(&mask, ids.tool_call_end),
+            "{text}: JSON not complete"
+        );
+        assert_eq!(m.consume(ids.tool_call_end).unwrap(), SpanState::Closed);
+    }
+
+    #[test]
+    fn rendered_calls_are_accepted_by_the_grammar() {
+        let (tok, reg, g) = setup(GrammarConfig::default());
+        let style = JsonStyle::default();
+        let cases = [
+            // Arguments given out of schema order are reordered.
+            ("get_weather", json!({"unit": "celsius", "city": "Paris"})),
+            ("get_weather", json!({"city": "Zürich"})),
+            (
+                "set_timer",
+                json!({"loud": true, "seconds": 90, "label": "tea"}),
+            ),
+            (
+                "search",
+                json!({"where": {"near": true, "lat": 48.5}, "tags": ["sale", "eco"], "query": "shoes", "max_price": 20}),
+            ),
+            ("search", json!({"query": "a\"b", "tags": []})),
+        ];
+        for (name, args) in cases {
+            let schema = reg.get(name).map(|t| &t.parameters);
+            let text = render_tool_call(name, &args, schema, &style);
+            walk(&g, &tok, &text);
+        }
+        let text = render_tool_call(
+            "get_weather",
+            &json!({"unit": "celsius", "city": "Paris"}),
+            reg.get("get_weather").map(|t| &t.parameters),
+            &style,
+        );
+        assert_eq!(
+            text,
+            r#"{"name": "get_weather", "arguments": {"city": "Paris", "unit": "celsius"}}"#
+        );
+    }
+
+    #[test]
+    fn sampled_calls_are_exactly_their_canonical_rendering() {
+        // Whatever the constrained sampler produces must equal the canonical
+        // rendering of the parsed call: the grammar admits one serialization,
+        // and `render_tool_call` is it. (Cancel is disabled: with random
+        // logits it would abort most spans at structural positions.)
+        let (tok, reg, g) = setup(GrammarConfig {
+            allow_cancel: false,
+            ..GrammarConfig::default()
+        });
+        let ids = g.special_ids();
+        let style = JsonStyle::default();
+        let mut rng = SplitMix64::new(77);
+        let params = SamplingParams {
+            temperature: 1.0,
+            top_k: None,
+            top_p: None,
+        };
+        let mut checked = 0;
+        for _ in 0..80 {
+            let toks = run_span(&g, &mut rng, &params, 400);
+            if toks.last() != Some(&ids.tool_call_end) {
+                continue;
+            }
+            let mut bytes = Vec::new();
+            for &t in &toks[..toks.len() - 1] {
+                match tok.token(t) {
+                    TokenPiece::Bytes(b) => bytes.extend_from_slice(&b),
+                    TokenPiece::Special(s) => panic!("special {s} inside JSON"),
+                }
+            }
+            let text = String::from_utf8(bytes).unwrap();
+            let v: Value = serde_json::from_str(&text).unwrap();
+            let name = v["name"].as_str().unwrap();
+            let schema = reg.get(name).map(|t| &t.parameters);
+            assert_eq!(
+                render_tool_call(name, &v["arguments"], schema, &style),
+                text
+            );
+            checked += 1;
+        }
+        assert!(checked >= 60, "only {checked} closed spans");
     }
 
     #[test]

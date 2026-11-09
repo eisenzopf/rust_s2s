@@ -1639,6 +1639,7 @@ dependencies = [
  "memmap2",
  "s2s-core",
  "s2s-kernels",
+ "s2s-tools",
  "serde",
  "serde_json",
  "tempfile",

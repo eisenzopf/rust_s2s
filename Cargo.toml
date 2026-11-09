@@ -24,6 +24,7 @@ s2s-core = { path = "crates/s2s-core" }
 # CPU only: never enable the `cuda` feature through this entry.
 s2s-kernels = { path = "crates/s2s-kernels", default-features = false }
 s2s-nn = { path = "crates/s2s-nn" }
+s2s-tools = { path = "crates/s2s-tools" }
 safetensors = "0.7"
 num-traits = "0.2"
 # Data pipeline (s2s-data).

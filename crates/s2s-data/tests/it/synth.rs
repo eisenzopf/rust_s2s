@@ -48,6 +48,11 @@ fn tool_call_decodes_back_and_result_lands_at_the_right_frame() {
     let json: serde_json::Value =
         serde_json::from_str(&tok.decode(&text[open + 1..close])).unwrap();
     let spec = script.turns[1].tool_call.as_ref().unwrap();
+    // The one serialization the runtime grammar allows (schema key order).
+    assert_eq!(
+        tok.decode(&text[open + 1..close]),
+        r#"{"name": "get_weather", "arguments": {"city": "Paris", "unit": "celsius"}}"#
+    );
     assert_eq!(json["name"], serde_json::json!(spec.name));
     assert_eq!(json["arguments"], spec.arguments);
     assert_eq!(
@@ -84,17 +89,38 @@ fn tool_call_decodes_back_and_result_lands_at_the_right_frame() {
         .strip_prefix("<tool_result>")
         .and_then(|d| d.strip_suffix("</tool_result>"))
         .unwrap();
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(inner).unwrap(),
-        spec.result
-    );
+    // Exactly what the runtime injects for this call.
+    let expected = s2s_tools::InjectionFormatter::new(s2s_tools::InjectionConfig::default())
+        .format_status(
+            &s2s_tools::CallId("c_1".into()),
+            "get_weather",
+            &s2s_tools::ToolStatus::Ok(spec.result.clone()),
+        )
+        .unwrap();
+    assert_eq!(decoded, expected.text);
+    let v: serde_json::Value = serde_json::from_str(inner).unwrap();
+    assert_eq!(v["result"], spec.result);
+    assert_eq!(v["status"], "ok");
 
     // System prompt + tool schema at frame 0, first.
     assert_eq!(s.injections[0].kind, InjectionKind::System);
     assert_eq!(s.injections[0].frame, 0);
+    // Rendered by the runtime's prompt renderer, exactly as at inference.
     let sys = tok.decode(&s.injections[0].tokens);
-    assert!(sys.starts_with("<sys>You are a helpful voice assistant.\n{"));
-    assert!(sys.ends_with("}</sys>") && sys.contains("get_weather"));
+    let registry = s2s_tools::ToolRegistry::from_specs(
+        script
+            .tools
+            .iter()
+            .map(|t| serde_json::from_value::<s2s_tools::ToolSpec>(t.clone()).unwrap()),
+    )
+    .unwrap();
+    assert_eq!(
+        sys,
+        registry.system_segment(
+            &s2s_tools::DefaultPromptRenderer,
+            "You are a helpful voice assistant."
+        )
+    );
 
     // The answer turn starts 0.3 s (4 frames) after the result; its first
     // word's <epad> is one frame before.
@@ -246,7 +272,7 @@ fn interruption_cuts_audio_and_words() {
 }
 
 #[test]
-fn cancelled_call_emits_tool_cancel_and_drops_result() {
+fn cancelled_call_emits_tool_cancel_and_injects_the_runtime_stub() {
     let tok = ByteTokenizer;
     let sp = SpecialIds::from_tokenizer(&tok).unwrap();
     let script = Script {
@@ -270,14 +296,29 @@ fn cancelled_call_emits_tool_cancel_and_drops_result() {
     let call = &syn.tool_calls[0];
     assert_eq!(call.result_frame, None);
     assert_eq!(call.cancel_frame, Some(call.end_frame + 1 + 6));
-    assert!(call
-        .call_json
-        .starts_with("{\"id\":\"c_1\",\"name\":\"lookup\""));
-    assert!(syn.sample.injections.is_empty());
+    // Canonical call text: no script id, runtime separators.
+    assert_eq!(
+        call.call_json,
+        r#"{"name": "lookup", "arguments": {"q": "x"}}"#
+    );
     assert_eq!(
         tm_cells(&syn.sample, sp.tool_cancel),
         [(call.end_frame + 7, 0)]
     );
+    // The result is dropped; the executor's `cancelled` outcome is injected
+    // before the frame after `<tool_cancel>`, formatted by the runtime.
+    let inj = &syn.sample.injections;
+    assert_eq!(inj.len(), 1);
+    assert_eq!(inj[0].kind, InjectionKind::ToolResult);
+    assert_eq!(inj[0].frame as usize, call.end_frame + 8);
+    let expected = s2s_tools::InjectionFormatter::new(s2s_tools::InjectionConfig::default())
+        .format_status(
+            &s2s_tools::CallId("c_1".into()),
+            "lookup",
+            &s2s_tools::ToolStatus::Cancelled,
+        )
+        .unwrap();
+    assert_eq!(tok.decode(&inj[0].tokens), expected.text);
 }
 
 #[test]
@@ -363,4 +404,41 @@ fn synthesized_sample_through_shard_and_assembly() {
         ex.tokens[row * ns + tm0] as i64
     );
     assert!(ex.weights[(row - 1) * k + tm0] > 0.0);
+}
+
+#[test]
+fn runtime_parser_reads_the_synthesized_tool_call() {
+    // Close the train/inference loop: the runtime's own span parser, fed the
+    // synthesized assistant text, must recover the call under the id the
+    // synthesizer used for its result injection.
+    let tok = ByteTokenizer;
+    let script = weather();
+    let syn = synthesize(&script, &tok, &SynthConfig::default()).unwrap();
+    let registry = std::sync::Arc::new(
+        s2s_tools::ToolRegistry::from_specs(
+            script
+                .tools
+                .iter()
+                .map(|t| serde_json::from_value::<s2s_tools::ToolSpec>(t.clone()).unwrap()),
+        )
+        .unwrap(),
+    );
+    let mut parser = s2s_tools::ToolCallParser::new(registry);
+    let mut events = parser.push_str(&tok.decode(&syn.sample.assistant_text()));
+    events.extend(parser.finish());
+    let calls: Vec<_> = events
+        .into_iter()
+        .filter_map(|e| match e {
+            s2s_tools::ParseEvent::ToolCall(c) => Some(c),
+            s2s_tools::ParseEvent::InvalidToolCall { .. } => panic!("invalid call: {e:?}"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].call_id.0, "c_1");
+    assert_eq!(calls[0].name, "get_weather");
+    assert_eq!(
+        calls[0].arguments,
+        serde_json::json!({"city": "Paris", "unit": "celsius"})
+    );
 }

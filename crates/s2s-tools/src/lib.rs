@@ -153,8 +153,8 @@ pub use executor::{
     SubmitError, ToolHandler, ToolOutcome, ToolStatus,
 };
 pub use grammar::{
-    tool_call_schema, GrammarConfig, GrammarError, JsonStyle, SpanState, SpecialIds,
-    ToolCallConstraint, ToolCallGrammar, ToolCallMatcher,
+    render_tool_call, tool_call_schema, GrammarConfig, GrammarError, JsonStyle, SpanState,
+    SpecialIds, ToolCallConstraint, ToolCallGrammar, ToolCallMatcher,
 };
 pub use inject::{
     CancelledPolicy, InjectionConfig, InjectionFormatter, InjectionSegment, ResultBudget,

@@ -14,6 +14,9 @@ path = "src/bin/s2s-data.rs"
 [dependencies]
 s2s-core.workspace = true
 s2s-kernels.workspace = true
+# Tool-call rendering, result formatting and system-prompt rendering, so
+# synthetic training text matches what the runtime produces at inference.
+s2s-tools.workspace = true
 memmap2.workspace = true
 serde.workspace = true
 serde_json.workspace = true

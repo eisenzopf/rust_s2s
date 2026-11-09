@@ -20,26 +20,39 @@
 //!   [`SynthConfig::monologue_slots`] slots of each frame. Words that would
 //!   collide are pushed later; a warning is reported when text lags its audio
 //!   by more than two frames.
-//! - **Tool calls.** `<tool_call>{"name":…,"arguments":…}</tool_call>` is
-//!   packed in reading order (frame by frame, slots `0..text_slots`), starting
+//! - **Tool calls.** `<tool_call>{"name": …, "arguments": {…}}</tool_call>`
+//!   is rendered by `s2s_tools::render_tool_call`, the exact serialization the
+//!   runtime grammar lets the model produce (separators, key order), with
+//!   arguments validated against the tool schemas, and packed in reading order (frame by frame, slots `0..text_slots`), starting
 //!   right after the assistant turn's own words (the spoken filler, whose audio
 //!   continues meanwhile) or at [`ToolCallSpec::start`].
-//! - **Tool results.** `<tool_result>{json}</tool_result>` becomes an
+//! - **Tool results.** `<tool_result>{"call_id": …, "name": …, "status":
+//!   "ok", "result": …}</tool_result>`, formatted by the runtime's own
+//!   `s2s_tools::InjectionFormatter` with call ids numbered the way the
+//!   runtime parser assigns them (`c_1`, `c_2`, … in call order), becomes an
 //!   [`Injection`] at frame `call_end + 1 + round(latency × 12.5)`, where
 //!   `call_end` is the frame holding `</tool_call>`: the runtime dispatches
 //!   when `</tool_call>` is sampled and injects the result before the first
 //!   frame after it arrives.
 //! - **Cancellation.** With [`ToolCallSpec::cancel_after`], `<tool_cancel>` is
 //!   written to `Tm` at `call_end + 1 + round(cancel_after × 12.5)` (or the
-//!   next free slot) and the result is dropped.
-//! - **System prompt.** [`Script::system`] and [`Script::tools`] become a
-//!   `<sys>…</sys>` injection at frame 0.
+//!   next free slot), the result is dropped, and the runtime's `cancelled`
+//!   stub is injected before the following frame, as the executor does.
+//! - **System prompt.** [`Script::system`] and [`Script::tools`] (as
+//!   `s2s_tools::ToolSpec`s) are rendered by the runtime's
+//!   `DefaultPromptRenderer` into a `<sys>…</sys>` injection at frame 0.
 //!
 //! Text is tokenized word by word with a leading space on every word except
 //! the first on each stream, so the decoded stream reads naturally.
 
 use s2s_core::streams::{StreamKind, StreamLayout, CODEBOOK_SIZE, FRAME_RATE};
 use serde::{Deserialize, Serialize};
+
+use s2s_core::streams::special;
+use s2s_tools::{
+    render_tool_call, CallId, DefaultPromptRenderer, InjectionConfig, InjectionFormatter,
+    JsonStyle, ParserConfig, ToolPromptRenderer, ToolRegistry, ToolSpec, ToolStatus,
+};
 
 use crate::sample::{Injection, InjectionKind, Sample, SampleMeta, SpeakerInfo, WordTiming};
 use crate::sampler::mix;
@@ -88,7 +101,8 @@ pub struct TimedWord {
 /// A tool call the assistant makes during a turn.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ToolCallSpec {
-    /// Optional call id (for parallel calls); included in call and result JSON.
+    /// Optional script-level label. Not written into the call text: like the
+    /// runtime, the synthesizer numbers calls `c_1`, `c_2`, … in call order.
     #[serde(default)]
     pub id: Option<String>,
     /// Tool name.
@@ -172,7 +186,9 @@ pub struct Script {
     /// System prompt, injected at frame 0.
     #[serde(default)]
     pub system: Option<String>,
-    /// Tool schemas (any JSON), appended to the system injection.
+    /// Tool declarations (`s2s_tools::ToolSpec` JSON: `name`, `description`,
+    /// `parameters`), rendered into the system injection. When non-empty,
+    /// every tool call must name one of them and match its schema.
     #[serde(default)]
     pub tools: Vec<serde_json::Value>,
     /// Seed for dummy audio codes.
@@ -337,26 +353,6 @@ struct AudioTurn {
     codes: Vec<Vec<u32>>,
 }
 
-fn call_json(c: &ToolCallSpec) -> Result<String> {
-    let name = serde_json::to_string(&c.name)?;
-    let args = serde_json::to_string(&c.arguments)?;
-    Ok(match &c.id {
-        Some(id) => format!(
-            "{{\"id\":{},\"name\":{name},\"arguments\":{args}}}",
-            serde_json::to_string(id)?
-        ),
-        None => format!("{{\"name\":{name},\"arguments\":{args}}}"),
-    })
-}
-
-fn result_json(c: &ToolCallSpec) -> Result<String> {
-    let res = serde_json::to_string(&c.result)?;
-    Ok(match &c.id {
-        Some(id) => format!("{{\"id\":{},\"result\":{res}}}", serde_json::to_string(id)?),
-        None => res,
-    })
-}
-
 fn check_secs(v: f64, what: &str, turn: usize) -> Result<f64> {
     if v.is_finite() {
         Ok(v)
@@ -407,7 +403,27 @@ pub fn synthesize(
     let mut injections: Vec<Injection> = Vec::new();
     let mut tool_calls: Vec<PlacedToolCall> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
-    let mut pending_cancels: Vec<usize> = Vec::new();
+    // The runtime's tool machinery, so training text matches inference text.
+    let specs: Vec<ToolSpec> = script
+        .tools
+        .iter()
+        .map(|t| {
+            serde_json::from_value(t.clone())
+                .map_err(|e| script_err(format!("tool declaration: {e}")))
+        })
+        .collect::<Result<_>>()?;
+    let registry =
+        ToolRegistry::from_specs(specs).map_err(|e| script_err(format!("tools: {e}")))?;
+    let style = JsonStyle::default();
+    let formatter = InjectionFormatter::new(InjectionConfig::default());
+    let id_prefix = ParserConfig::default().call_id_prefix;
+    let mut call_count = 0usize;
+    // (call index in `tool_calls`, call id, tool name) for cancelled calls.
+    let mut cancelled: Vec<(usize, CallId, String)> = Vec::new();
+    // (requested frame, call index) of cancels not yet written to Tm, and
+    // (call index, actual frame) once written.
+    let mut pending_cancels: Vec<(usize, usize)> = Vec::new();
+    let mut placed_cancels: Vec<(usize, usize)> = Vec::new();
     let mut first_word = [true, true]; // [Tu, Tm]
     let (mut prev_start, mut prev_end) = (0.0f64, 0.0f64);
     let mut last_result: Option<f64> = None;
@@ -415,13 +431,17 @@ pub fn synthesize(
     let mut result_frames_max = 0usize;
 
     // Flush cancels due at or before `frame` onto Tm.
-    let flush = |tm: &mut Placer, pending: &mut Vec<usize>, frame: usize| {
+    let flush = |tm: &mut Placer,
+                 pending: &mut Vec<(usize, usize)>,
+                 placed: &mut Vec<(usize, usize)>,
+                 frame: usize| {
         pending.sort_unstable();
-        while let Some(&f) = pending.first() {
+        while let Some(&(f, call)) = pending.first() {
             if f > frame {
                 break;
             }
-            tm.put_seq(f, &[sp.tool_cancel], 1);
+            let (actual, _) = tm.put_seq(f, &[sp.tool_cancel], 1);
+            placed.push((call, actual));
             pending.remove(0);
         }
     };
@@ -564,7 +584,7 @@ pub fn synthesize(
             let placed = match turn.speaker {
                 Role::User => tu.place_word(desired, &toks, 1, cfg.user_epad.then_some(sp.epad)),
                 Role::Assistant => {
-                    flush(&mut tm, &mut pending_cancels, desired);
+                    flush(&mut tm, &mut pending_cancels, &mut placed_cancels, desired);
                     tm.place_word(desired, &toks, cfg.monologue_slots, Some(sp.epad))
                 }
             };
@@ -589,13 +609,32 @@ pub fn synthesize(
                     "turn {ti}: only the assistant calls tools"
                 )));
             }
-            let json = call_json(call)?;
+            let schema = registry.get(&call.name).map(|t| &t.parameters);
+            if !registry.is_empty() {
+                if schema.is_none() {
+                    return Err(script_err(format!(
+                        "turn {ti}: unknown tool {:?}",
+                        call.name
+                    )));
+                }
+                registry
+                    .validate_arguments(&call.name, &call.arguments)
+                    .map_err(|e| script_err(format!("turn {ti}: {e}")))?;
+            }
+            let arguments = if call.arguments.is_null() {
+                serde_json::json!({})
+            } else {
+                call.arguments.clone()
+            };
+            let json = render_tool_call(&call.name, &arguments, schema, &style);
+            call_count += 1;
+            let call_id = CallId(format!("{id_prefix}{call_count}"));
             let req = start_frame
                 + match call.start {
                     Some(s) => secs_to_frames(check_secs(s, "tool call start", ti)?),
                     None => 0,
                 };
-            flush(&mut tm, &mut pending_cancels, req);
+            flush(&mut tm, &mut pending_cancels, &mut placed_cancels, req);
             let mut toks = vec![sp.tool_call];
             toks.extend(tok.encode(&json));
             toks.push(sp.tool_call_end);
@@ -613,14 +652,23 @@ pub fn synthesize(
             match call.cancel_after {
                 Some(c) => {
                     let f = last + 1 + secs_to_frames(check_secs(c, "cancel_after", ti)?);
-                    pending_cancels.push(f);
+                    pending_cancels.push((f, tool_calls.len()));
                     placed.cancel_frame = Some(f);
+                    cancelled.push((tool_calls.len(), call_id, call.name.clone()));
                 }
                 None => {
                     let f = last + 1 + secs_to_frames(latency);
-                    let mut toks = vec![sp.tool_result];
-                    toks.extend(tok.encode(&result_json(call)?));
-                    toks.push(sp.tool_result_end);
+                    let seg = formatter
+                        .format_status(&call_id, &call.name, &ToolStatus::Ok(call.result.clone()))
+                        .ok_or_else(|| script_err("tool result was dropped by the formatter"))?;
+                    let toks = marked_tokens(
+                        tok,
+                        &seg.text,
+                        special::TOOL_RESULT,
+                        special::TOOL_RESULT_END,
+                        sp.tool_result,
+                        sp.tool_result_end,
+                    )?;
                     injections.push(Injection {
                         frame: f as u32,
                         kind: InjectionKind::ToolResult,
@@ -639,7 +687,35 @@ pub fn synthesize(
             prev_end = start + eff_dur;
         }
     }
-    flush(&mut tm, &mut pending_cancels, usize::MAX);
+    flush(
+        &mut tm,
+        &mut pending_cancels,
+        &mut placed_cancels,
+        usize::MAX,
+    );
+    // Cancelled calls: the runtime cancels when it parses `<tool_cancel>` and
+    // injects the executor's `cancelled` outcome before the next frame.
+    for (call, actual) in &placed_cancels {
+        tool_calls[*call].cancel_frame = Some(*actual);
+        let (_, call_id, name) = cancelled
+            .iter()
+            .find(|(c, ..)| c == call)
+            .expect("every placed cancel belongs to a cancelled call");
+        if let Some(seg) = formatter.format_status(call_id, name, &ToolStatus::Cancelled) {
+            injections.push(Injection {
+                frame: (*actual + 1) as u32,
+                kind: InjectionKind::ToolResult,
+                tokens: marked_tokens(
+                    tok,
+                    &seg.text,
+                    special::TOOL_RESULT,
+                    special::TOOL_RESULT_END,
+                    sp.tool_result,
+                    sp.tool_result_end,
+                )?,
+            });
+        }
+    }
     // Record the actual cancel frames (they may have been pushed later).
     let cancel_cells: Vec<usize> = tm
         .cells
@@ -708,14 +784,9 @@ pub fn synthesize(
     }
 
     // System injection at frame 0.
-    if script.system.is_some() || !script.tools.is_empty() {
-        let mut text = script.system.clone().unwrap_or_default();
-        for t in &script.tools {
-            if !text.is_empty() {
-                text.push('\n');
-            }
-            text.push_str(&serde_json::to_string(t)?);
-        }
+    if script.system.is_some() || !registry.is_empty() {
+        let specs: Vec<&ToolSpec> = registry.specs().collect();
+        let text = DefaultPromptRenderer.render(script.system.as_deref().unwrap_or(""), &specs);
         let mut toks = vec![sp.sys];
         toks.extend(tok.encode(&text));
         toks.push(sp.sys_end);
@@ -766,4 +837,24 @@ pub fn synthesize(
         tool_calls,
         warnings,
     })
+}
+
+/// Tokens for a `<open>body<close>` segment rendered by the runtime: the
+/// markers become the special ids and the body is tokenized as text.
+fn marked_tokens(
+    tok: &dyn TextTokenizer,
+    text: &str,
+    open: &str,
+    close: &str,
+    open_id: u32,
+    close_id: u32,
+) -> Result<Vec<u32>> {
+    let body = text
+        .strip_prefix(open)
+        .and_then(|t| t.strip_suffix(close))
+        .ok_or_else(|| script_err(format!("segment is not wrapped in {open}…{close}")))?;
+    let mut toks = vec![open_id];
+    toks.extend(tok.encode(body));
+    toks.push(close_id);
+    Ok(toks)
 }
