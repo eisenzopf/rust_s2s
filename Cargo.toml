@@ -10,9 +10,12 @@ members = [
     "crates/s2s-server",
     "crates/s2s-duplex",
     "crates/s2s-infer",
+    "crates/s2s-model",
 ]
 # cuda-oxide crate: own toolchain (Rust 1.99.1), built with `cargo oxide`.
-exclude = ["crates/s2s-simt"]
+# kyutai-ref-lm: fixture generator with its own dependency tree (Kyutai's
+# `moshi` crate + candle); see tools/kyutai-ref-lm.
+exclude = ["crates/s2s-simt", "tools/kyutai-ref-lm"]
 
 [workspace.package]
 version = "0.1.0"
@@ -25,6 +28,7 @@ repository = "https://github.com/eisenzopf/rust_s2s"
 s2s-core = { path = "crates/s2s-core" }
 # CPU only: never enable the `cuda` feature through this entry.
 s2s-kernels = { path = "crates/s2s-kernels", default-features = false }
+s2s-model = { path = "crates/s2s-model" }
 s2s-nn = { path = "crates/s2s-nn" }
 s2s-tools = { path = "crates/s2s-tools" }
 s2s-data = { path = "crates/s2s-data" }
@@ -38,6 +42,7 @@ serde_json = "1"
 crc32fast = "1.4"
 clap = { version = "4.5", features = ["derive"] }
 tempfile = "3"
+toml = "0.8"
 # NVIDIA CUDA Rust (github.com/NVIDIA/cuda-rust, formerly NVlabs/cutile-rs and
 # NVlabs/cuda-oxide). Every CUDA Rust crate comes from this one pinned
 # revision: mixing a crates.io copy with a git copy yields two incompatible
@@ -67,4 +72,6 @@ opt-level = 3
 [profile.dev.package.s2s-duplex]
 opt-level = 3
 [profile.dev.package.s2s-infer]
+opt-level = 3
+[profile.dev.package.s2s-model]
 opt-level = 3

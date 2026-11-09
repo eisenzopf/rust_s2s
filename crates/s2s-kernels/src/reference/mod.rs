@@ -4,8 +4,10 @@
 //! |---|---|---|
 //! | [`gemm`] | GEMM with transposes, `Linear` fwd/bwd | 1 |
 //! | [`norm`] | RMSNorm fwd/bwd (optional fused residual) | 2 |
-//! | [`rope`] | Rotary position embedding fwd/bwd, explicit positions | 3 |
+//! | [`layernorm`] | LayerNorm fwd (inference) | 2 |
+//! | [`rope`] | Rotary position embedding fwd/bwd, explicit positions; precomputed f32-angle tables | 3 |
 //! | [`activation`] | SwiGLU fwd/bwd | 4 |
+//! | [`elementwise`] | SiLU / GELU (erf, tanh) / ReLU / sigmoid families, `erf`, gated linear unit fwd (inference) | 4 |
 //! | [`attention`] | Causal / sliding-window / pinned-prefix GQA attention fwd/bwd, single-query decode | 5, 6 |
 //! | [`embedding`] | Multi-stream embedding gather-and-sum fwd / scatter-add bwd | 7 |
 //! | [`loss`] | Softmax, log-softmax, weighted cross-entropy with ignore index | 8, 9 |
@@ -17,8 +19,10 @@
 pub mod activation;
 pub mod attention;
 pub mod delay;
+pub mod elementwise;
 pub mod embedding;
 pub mod gemm;
+pub mod layernorm;
 pub mod loss;
 pub mod norm;
 pub mod optim;

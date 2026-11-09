@@ -1,0 +1,18 @@
+[package]
+name = "s2s-model"
+description = "Model definitions and streaming inference for rust_s2s. The `kyutai` module is a CPU port of Kyutai's multistream LM (Moshi / Delayed-Streams-Modeling STT): temporal transformer + depformer, safetensors loading by Kyutai's tensor names, KV-cached frame stepping and an ASR driver."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+s2s-core.workspace = true
+s2s-kernels.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+
+[lints]
+workspace = true

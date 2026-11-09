@@ -91,9 +91,99 @@ pub fn rope_bwd<T: Float>(
     rotate(dx, positions, tokens, heads, d, cfg, -1.0);
 }
 
+/// Cosine and sine tables `[tokens, d / 2]` for [`rope_fwd_tables`], with the
+/// angles computed in `f32` exactly as candle-based implementations do
+/// (Kyutai's Moshi/DSM models): `inv_freq[i] = 1 / theta^(2i / d)` and
+/// `angle = position * inv_freq[i]`, all in `f32`.
+///
+/// [`rope_fwd`] computes the angles in `f64`. At large positions the two
+/// differ by up to a few `f32` ulps of the angle, which matters when matching
+/// a reference implementation logit-for-logit.
+pub fn rope_tables_f32(positions: &[i64], d: usize, theta: f32) -> (Vec<f32>, Vec<f32>) {
+    assert!(d.is_multiple_of(2), "rope: head dim must be even");
+    let half = d / 2;
+    let inv_freq: Vec<f32> = (0..half)
+        .map(|i| 1f32 / theta.powf((2 * i) as f32 / d as f32))
+        .collect();
+    let mut cos = Vec::with_capacity(positions.len() * half);
+    let mut sin = Vec::with_capacity(positions.len() * half);
+    for &p in positions {
+        for &f in &inv_freq {
+            let ang = p as f32 * f;
+            cos.push(ang.cos());
+            sin.push(ang.sin());
+        }
+    }
+    (cos, sin)
+}
+
+/// RoPE forward from precomputed tables, in place.
+///
+/// - `x`: `[tokens, heads, d]`
+/// - `cos`, `sin`: `[tokens, d / 2]` (e.g. from [`rope_tables_f32`])
+pub fn rope_fwd_tables<T: Float>(
+    x: &mut [T],
+    cos: &[T],
+    sin: &[T],
+    tokens: usize,
+    heads: usize,
+    d: usize,
+    layout: RopeLayout,
+) {
+    assert!(d.is_multiple_of(2), "rope: head dim must be even");
+    let half = d / 2;
+    assert_eq!(x.len(), tokens * heads * d);
+    assert_eq!(cos.len(), tokens * half);
+    assert_eq!(sin.len(), tokens * half);
+    for t in 0..tokens {
+        for i in 0..half {
+            let (c, s) = (cos[t * half + i], sin[t * half + i]);
+            let (a, b) = pair_index(layout, d, i);
+            for h in 0..heads {
+                let base = (t * heads + h) * d;
+                let x1 = x[base + a];
+                let x2 = x[base + b];
+                x[base + a] = x1 * c - x2 * s;
+                x[base + b] = x1 * s + x2 * c;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tables_match_rope_fwd() {
+        for layout in [RopeLayout::Half, RopeLayout::Interleaved] {
+            let (tokens, heads, d) = (3, 2, 8);
+            let positions = [0i64, 7, 300];
+            let x: Vec<f32> = (0..tokens * heads * d)
+                .map(|i| (i as f32 * 0.31).sin())
+                .collect();
+            let mut a = x.clone();
+            rope_fwd(
+                &mut a,
+                &positions,
+                tokens,
+                heads,
+                d,
+                RopeConfig {
+                    theta: 10_000.0,
+                    layout,
+                },
+            );
+            let (cos, sin) = rope_tables_f32(&positions, d, 10_000.0);
+            let mut b = x.clone();
+            rope_fwd_tables(&mut b, &cos, &sin, tokens, heads, d, layout);
+            for (p, q) in a.iter().zip(&b) {
+                assert!((p - q).abs() < 1e-4, "{p} vs {q}");
+            }
+            // Position 0 is the identity.
+            assert_eq!(&b[..heads * d], &x[..heads * d]);
+        }
+    }
 
     const CFG: RopeConfig = RopeConfig {
         theta: 10_000.0,
