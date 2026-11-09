@@ -1,0 +1,18 @@
+[package]
+name = "s2s-mimi"
+description = "Mimi neural audio codec (Kyutai) on CPU in plain Rust: loads Kyutai's safetensors checkpoints, offline and streaming encode/decode."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+s2s-core.workspace = true
+s2s-kernels.workspace = true
+safetensors.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

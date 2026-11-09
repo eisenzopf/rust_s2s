@@ -11,11 +11,12 @@ members = [
     "crates/s2s-duplex",
     "crates/s2s-infer",
     "crates/s2s-model",
+    "crates/s2s-mimi",
 ]
 # cuda-oxide crate: own toolchain (Rust 1.99.1), built with `cargo oxide`.
-# kyutai-ref-lm: fixture generator with its own dependency tree (Kyutai's
-# `moshi` crate + candle); see tools/kyutai-ref-lm.
-exclude = ["crates/s2s-simt", "tools/kyutai-ref-lm"]
+# kyutai-ref-lm / kyutai-ref-mimi: standalone fixture generators with their
+# own dependency trees (Kyutai's candle-based `moshi` crate).
+exclude = ["crates/s2s-simt", "tools/kyutai-ref-lm", "tools/kyutai-ref-mimi"]
 
 [workspace.package]
 version = "0.1.0"
@@ -33,6 +34,7 @@ s2s-nn = { path = "crates/s2s-nn" }
 s2s-tools = { path = "crates/s2s-tools" }
 s2s-data = { path = "crates/s2s-data" }
 s2s-train = { path = "crates/s2s-train" }
+s2s-mimi = { path = "crates/s2s-mimi" }
 safetensors = "0.7"
 num-traits = "0.2"
 # Data pipeline (s2s-data).
@@ -74,4 +76,6 @@ opt-level = 3
 [profile.dev.package.s2s-infer]
 opt-level = 3
 [profile.dev.package.s2s-model]
+opt-level = 3
+[profile.dev.package.s2s-mimi]
 opt-level = 3
