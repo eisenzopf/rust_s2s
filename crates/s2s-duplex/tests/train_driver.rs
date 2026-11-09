@@ -85,3 +85,36 @@ fn resume_is_bit_exact_including_the_loader_position() {
     }
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn windows_without_targets_do_not_cost_optimizer_steps() {
+    // The weather dialogue starts with a long injected system prompt (tool
+    // schema, byte tokenizer): small windows can fall entirely inside it.
+    let dir = std::env::temp_dir().join(format!("s2s-duplex-empty-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let script = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../s2s-data/tests/data/weather.json"),
+    )
+    .unwrap();
+    let path = dir.join("w.s2s");
+    let mut w = ShardWriter::create(&path).unwrap();
+    let syn = synthesize(
+        &Script::from_json(&script).unwrap(),
+        &ByteTokenizer,
+        &SynthConfig::default(),
+    )
+    .unwrap();
+    w.append(&syn.sample).unwrap();
+    w.finish().unwrap();
+    let mut a = args(path, None, None);
+    a.window = 24;
+    a.steps = 12;
+    let mut logged = Vec::new();
+    let summary = run(&a, &mut |s| logged.push((s.step, s.loss))).unwrap();
+    assert_eq!(summary.end_step, 12);
+    assert_eq!(logged.len(), 12);
+    for (step, loss) in logged {
+        assert!(loss > 0.0, "step {step} had no training signal");
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}

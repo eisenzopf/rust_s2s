@@ -232,8 +232,22 @@ pub fn run(args: &TrainArgs, log: &mut dyn FnMut(&StepLog)) -> Result<TrainSumma
     };
 
     let stop = args.stop_after.unwrap_or(args.steps).min(args.steps);
+    // Windows with no loss weight at all (e.g. entirely inside a long system
+    // prompt injection) carry no signal: skip them rather than spend an
+    // optimizer step (and its momentum / weight decay) on nothing.
+    let mut empty_in_a_row = 0u32;
     while opt.step < stop {
         let batch = DuplexBatch::<f32>::from_data(&loader.next_batch()?);
+        if batch.weights.iter().all(|&w| w == 0.0) {
+            empty_in_a_row += 1;
+            if empty_in_a_row > 10_000 {
+                return Err(
+                    "10000 batches in a row without any loss weight: no training targets?".into(),
+                );
+            }
+            continue;
+        }
+        empty_in_a_row = 0;
         model.zero_grad();
         let (_, report, ctx) = model.forward_loss(&batch, ckpt_mode);
         model.backward(ctx);
