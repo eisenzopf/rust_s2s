@@ -1,0 +1,26 @@
+[package]
+name = "s2s-eval"
+description = "Evaluation metrics for rust_s2s (plan §11): WER/CER with S/D/I alignment and text normalization, tool-calling accuracy, latency percentiles and turn-taking latency, and SI-SDR / log-mel distance codec-quality proxies. CPU only, with an `s2s-eval` CLI."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "s2s-eval"
+path = "src/bin/s2s-eval.rs"
+
+[dependencies]
+s2s-tools.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+rustfft.workspace = true
+hound.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

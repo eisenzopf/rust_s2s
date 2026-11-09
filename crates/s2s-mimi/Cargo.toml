@@ -14,7 +14,7 @@ safetensors.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 # WAV I/O for the mimi-tokenize tool (pure Rust).
-hound = "3.5"
+hound.workspace = true
 
 [lints]
 workspace = true
