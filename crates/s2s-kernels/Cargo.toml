@@ -1,0 +1,27 @@
+[package]
+name = "s2s-kernels"
+description = "Kernels for rust_s2s. The `reference` module holds plain-Rust CPU implementations (forward and backward) that every GPU kernel is tested against."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+# GPU kernels written in cuTile Rust. Building needs CUDA 13.2+ headers
+# (set CUDA_TOOLKIT_PATH); running needs an sm_80+ GPU and driver R580+.
+cuda = ["dep:cutile", "dep:cutile-ir", "dep:cutile-compiler"]
+
+[dependencies]
+s2s-core.workspace = true
+num-traits.workspace = true
+cutile = { workspace = true, optional = true }
+# Used by tests/cuda_compile.rs (driver-free Tile IR lowering and cubin
+# assembly). Regular optional deps rather than dev-deps so that CPU-only
+# builds never compile CUDA bindings.
+cutile-ir = { workspace = true, optional = true }
+cutile-compiler = { workspace = true, optional = true }
+
+[lints]
+workspace = true

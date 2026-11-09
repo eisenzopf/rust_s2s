@@ -1,0 +1,32 @@
+[workspace]
+resolver = "2"
+members = ["crates/s2s-core", "crates/s2s-kernels"]
+# cuda-oxide crate: own toolchain (Rust 1.99.1), built with `cargo oxide`.
+exclude = ["crates/s2s-simt"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+license = "MIT"
+repository = "https://github.com/eisenzopf/rust_s2s"
+
+[workspace.dependencies]
+s2s-core = { path = "crates/s2s-core" }
+num-traits = "0.2"
+# NVIDIA CUDA Rust (github.com/NVIDIA/cuda-rust, formerly NVlabs/cutile-rs and
+# NVlabs/cuda-oxide). Every CUDA Rust crate comes from this one pinned
+# revision: mixing a crates.io copy with a git copy yields two incompatible
+# `cuda-core` runtimes, and cuTile (tile) and cuda-oxide (SIMT) kernels must
+# share one runtime to run on the same streams and buffers. See ADR 0001.
+cutile = { git = "https://github.com/NVIDIA/cuda-rust", rev = "367bc0f8e671070e00eebc7e5498f3e8eebefc72" }
+cutile-ir = { git = "https://github.com/NVIDIA/cuda-rust", rev = "367bc0f8e671070e00eebc7e5498f3e8eebefc72" }
+cutile-compiler = { git = "https://github.com/NVIDIA/cuda-rust", rev = "367bc0f8e671070e00eebc7e5498f3e8eebefc72" }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+needless_range_loop = "allow"
+too_many_arguments = "allow"

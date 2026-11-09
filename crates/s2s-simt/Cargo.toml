@@ -1,0 +1,24 @@
+[package]
+name = "s2s-simt"
+description = "SIMT GPU kernels for rust_s2s, written with NVIDIA cuda-oxide (sparse/irregular ops: masks, embeddings, scatter-add, delays)."
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/eisenzopf/rust_s2s"
+publish = false
+
+# Standalone: cuda-oxide needs its own pinned toolchain (rust-toolchain.toml)
+# and builds through `cargo oxide`, so this crate is excluded from the root
+# workspace.
+[workspace]
+
+[dependencies]
+# NVIDIA CUDA Rust, pinned to the same revision as the root workspace's cuTile
+# crates so both kernel models share one cuda-core runtime (ADR 0001).
+cuda-device = { git = "https://github.com/NVIDIA/cuda-rust", rev = "367bc0f8e671070e00eebc7e5498f3e8eebefc72" }
+cuda-host = { git = "https://github.com/NVIDIA/cuda-rust", rev = "367bc0f8e671070e00eebc7e5498f3e8eebefc72" }
+cuda-core = { git = "https://github.com/NVIDIA/cuda-rust", rev = "367bc0f8e671070e00eebc7e5498f3e8eebefc72" }
+
+# CPU references the GPU kernels are checked against.
+s2s-core = { path = "../s2s-core" }
+s2s-kernels = { path = "../s2s-kernels" }

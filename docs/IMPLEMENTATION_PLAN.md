@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| Status | Draft v0.1 — design proposal, nothing built yet |
+| Status | v0.2 — M0 in progress: workspace, CPU reference kernels, and first cuTile + cuda-oxide kernels built (see [ADR 0001](decisions/0001-gpu-toolchain.md)) |
 | Scope | GPU kernels, training runtime, model, data pipeline, streaming server |
 | Primary references | Kyutai *Moshi* / *Mimi* (2024), Kyutai *Delayed Streams Modeling* (DSM, arXiv 2509.08753), NVIDIA *CUDA Rust* (cuda-oxide, cuTile Rust) |
 
@@ -281,7 +281,8 @@ rust_s2s/
 ├── Cargo.toml                 # workspace
 ├── crates/
 │   ├── s2s-core/              # Tensor handle, DType, Shape, Device, CUDA context/streams/events, caching allocator, errors
-│   ├── s2s-kernels/           # GPU kernels (cuTile Rust / cuda-oxide / NVRTC fallback) + CPU reference impls
+│   ├── s2s-kernels/           # CPU reference kernels (fwd + bwd) + dense GPU kernels in cuTile Rust (feature `cuda`)
+│   ├── s2s-simt/              # Sparse/irregular GPU kernels in cuda-oxide (standalone; Rust 1.99.1, `cargo oxide`)
 │   ├── s2s-backend/           # `Backend` trait; `CpuRef` and `Cuda` implementations; cuBLASLt/NCCL via cudarc
 │   ├── s2s-autograd/          # Layer-wise explicit backward, activation checkpointing, grad buffers
 │   ├── s2s-nn/                # Linear, Embedding(multi-table), RMSNorm, Attention(GQA, RoPE, sliding), SwiGLU, Conv1d, ConvTr1d, RVQ
@@ -304,7 +305,7 @@ rust_s2s/
 | Crate | Use |
 |---|---|
 | `cudarc` | Driver API, NVRTC, cuBLAS/cuBLASLt, NCCL bindings |
-| `cutile-rs` / cuda-oxide | Custom GPU kernels |
+| `cutile` + cuda-oxide (`cuda-device`, `cuda-host`), NVIDIA CUDA Rust | Custom GPU kernels: Tile model for dense math, SIMT model for sparse ops (ADR 0001) |
 | `safetensors` | Weight and checkpoint I/O |
 | `tokenizers` | Text tokenizer |
 | `llguidance` | Grammar-constrained decoding |
@@ -351,30 +352,43 @@ A small "tape" just records the layer order for the backward pass. Every layer's
 
 ### 7.1 Toolchain strategy
 
-NVIDIA's CUDA Rust effort has two tracks:
-- **cuda-oxide** — a Rust → PTX compiler for SIMT-style kernels. Experimental, v0.1–0.2 in 2026.
-- **cuTile Rust** (`cutile-rs`) — a tile-based programming model shipped as a normal crate.
+We use NVIDIA's CUDA Rust libraries, announced as **NVlabs/cutile-rs** and **NVlabs/cuda-oxide** and now both maintained in `github.com/NVIDIA/cuda-rust` (Apache-2.0). They provide two kernel models on one shared host runtime (`cuda-core`, `cuda-async`):
+- **cuTile Rust (Tile model).** Tensor-style kernels in stable Rust, JIT-compiled through CUDA Tile IR. Needs CUDA 13.2+ (13.3 recommended) and an sm_80+ GPU.
+- **cuda-oxide (SIMT model).** A custom rustc backend that compiles `#[kernel]` functions ahead of time to PTX, with explicit threads, atomics, shared memory and warp ops. Alpha; needs a pinned Rust 1.99.1 and the `cargo oxide` driver. *(The crates.io crate called `cuda-oxide` is an unrelated GPL-3.0 project. Never use it.)*
 
-Both are young, so the plan **isolates them behind the `Backend` trait** and keeps a fallback path:
+**[ADR 0001](decisions/0001-gpu-toolchain.md)** records the findings and the decision. Following NVIDIA's own guidance (Tile for dense math, SIMT for sparse or irregular work):
 
-| Layer | Choice | Fallback |
+| Layer | Choice | Crate |
 |---|---|---|
-| Context, memory, streams, events, graphs | `cudarc` | — |
-| Dense GEMM (all matmuls) | **cuBLASLt** via `cudarc` (bf16 in, fp32 accumulate, fused bias/act epilogues) | Custom cutile-rs GEMM later, for exotic fusions |
-| Tile-friendly fused kernels (attention, norms, fused CE, AdamW) | **cuTile Rust** | CUDA C compiled at build time via NVRTC |
-| Irregular SIMT kernels (RVQ argmin, scatter-add, sampling, grammar mask apply) | **cuda-oxide** | CUDA C via NVRTC |
+| Context, memory, streams, events, graphs | `cuda-core` / `cuda-async` (shared by both models) | — |
+| Dense GEMM (all matmuls) | **cuBLASLt** via `cudarc` (bf16 in, fp32 accumulate, fused epilogues); buffers shared with cuTile through `Tensor::from_foreign` | `s2s-kernels` (later `s2s-backend`) |
+| Dense fused kernels: norms, RoPE, SwiGLU, attention fwd/bwd and decode, fused linear + CE, softmax, AdamW, Mimi convs | **cuTile Rust** | `s2s-kernels` (feature `cuda`) |
+| Sparse/irregular kernels: token-bitmask masking, embedding gather and atomic scatter-add, delay patterns, KV-cache ring writes, sampling, RVQ search | **cuda-oxide** | `s2s-simt` (standalone, Rust 1.99.1) |
 | Collectives | **NCCL** via `cudarc` | — |
 
-> **Validation note.** The exact cuda-oxide and cuTile Rust APIs, supported architectures and limitations couldn't be checked against the official docs while this plan was written (restricted network). **Milestone M0 is a time-boxed spike** that confirms them on the target GPUs before we commit kernel work to either track.
+All CUDA Rust crates are pinned to **one git revision** of `NVIDIA/cuda-rust`, so both models share a single `cuda-core` runtime and can run on the same streams and buffers.
+
+**What M0 verified without a GPU:**
+- **Toolkit:** a CUDA 13.5 toolkit tree assembled from NVIDIA's PyPI wheels (`scripts/fetch-cuda-wheels.sh`) is enough to build and compile-check both models.
+- **cuTile kernels:** lowered to Tile IR and assembled by `tileiras` into **cubins** for sm_80/89/90/100 (`tests/cuda_compile.rs`).
+- **cuda-oxide kernels:** compiled to PTX and assembled by `ptxas` into **cubins** for sm_80/89/90/100 (`scripts/check-simt.sh`).
+- **Reusable NVIDIA kernels:** NVIDIA ships forward-only f16 inference kernels (flash attention incl. GQA prefill and split-K decode, RMSNorm, RoPE, KV cache). **No backward kernels exist; those are ours to write.**
+- **Atomics finding:** cuda-oxide currently lowers float `fetch_add` to a compare-and-swap loop rather than native `red.add.f32`. It's correct but may need an inline-PTX fast path for contended scatter-adds.
 
 **Target architectures:**
 - `sm_90` (H100/H200) — primary.
+- `sm_80` (A100) — supported.
 - `sm_100` (B200) — secondary.
 - `sm_89` / `sm_86` (L40S, RTX 4090/3090) — for development.
+- **Not supported:** sm_70/sm_75 (V100, T4). cuTile needs sm_80+.
 
 **Precision:** bf16 weights and activations, fp32 accumulation, fp32 master weights and optimizer state. FP8 (E4M3) GEMMs for training and inference are a later optimization (M10).
 
 ### 7.2 Kernel inventory
+
+Status: every kernel below already has its CPU reference (`s2s-kernels::reference`), with a passing gradient check where it has a backward pass. GPU versions written so far are all f32, compile-checked to cubins, and **not yet run on a GPU**:
+- **cuTile:** #2 RMSNorm fwd, #4 SwiGLU fwd.
+- **cuda-oxide:** #7 embedding gather-sum fwd and atomic scatter-add bwd, #14 token-bitmask mask, #20 delays.
 
 Each kernel ships with:
 - a CPU reference implementation,
@@ -389,19 +403,19 @@ Each kernel ships with:
 | 3 | RoPE (applied in-place to Q/K) | ✓ | ✓ | Attention | cuTile | P0 |
 | 4 | SwiGLU (fused gate·up activation) | ✓ | ✓ | MLP | cuTile | P0 |
 | 5 | Flash attention, causal + sliding window + prefix pin, GQA | ✓ | ✓ | Temporal TT training/prefill | cuTile | P0 |
-| 6 | Flash-decoding (split-K over KV cache), batched sessions | ✓ | — | Inference | cuTile | P0 |
+| 6 | Flash-decoding (split-K over KV cache), batched sessions | ✓ | — | Inference | cuda-oxide | P0 |
 | 7 | Multi-table embedding gather-and-sum (K streams → one vector) | ✓ | ✓ (scatter-add) | TT input, depth input | cuda-oxide | P0 |
 | 8 | Fused linear + cross-entropy, chunked over vocab, per-target weights, ignore-index | ✓ | ✓ | Text heads (large vocab) | cuTile | P0 |
 | 9 | Softmax / log-softmax (small vocab heads) | ✓ | ✓ | Audio heads (2048) | cuTile | P1 |
 | 10 | AdamW, multi-tensor fused, + global grad-norm (two-pass reduce) + clip | ✓ | — | Optimizer | cuTile | P0 |
-| 11 | Cast / scale / fill / copy-strided | ✓ | — | Everywhere | cuda-oxide | P0 |
+| 11 | Cast / scale / fill / copy-strided | ✓ | — | Everywhere | cuTile | P0 |
 | 12 | KV-cache append + ring-buffer write | ✓ | — | Inference | cuda-oxide | P0 |
 | 13 | Sampling: temperature, top-k, top-p, Gumbel, with additive logit mask | ✓ | — | Inference | cuda-oxide | P0 |
 | 14 | Grammar mask apply (bitset → −inf on logits) | ✓ | — | Tool calls | cuda-oxide | P1 |
 | 15 | Causal Conv1d with streaming state (+ELU, folded weight-norm) | ✓ | ✓ (codec training only) | Mimi | cuTile | P1 |
 | 16 | ConvTranspose1d with streaming state | ✓ | ✓ (codec training only) | Mimi | cuTile | P1 |
 | 17 | RVQ encode (nearest code over 2048 × D, per level, residual update) | ✓ | — (STE in training) | Mimi | cuda-oxide | P1 |
-| 18 | RVQ decode (gather + sum over levels) | ✓ | ✓ | Mimi | cuda-oxide | P1 |
+| 18 | RVQ decode (gather + sum over levels) | ✓ | ✓ | Mimi | cuTile | P1 |
 | 19 | Depth Transformer "per-sub-step linear" (batched GEMM, weight index = sub-step) | ✓ | ✓ | Depth TT | cuBLASLt grouped / cuTile | P1 |
 | 20 | Delay-pattern shift/unshift (stream-wise roll with pad fill) | ✓ | — | Data → model | cuda-oxide | P1 |
 | 21 | FP8 GEMM + scaling (per-tensor/per-block) | ✓ | ✓ | Perf | cuBLASLt | P2 |
@@ -618,7 +632,17 @@ flowchart LR
 
 ### M0 — Toolchain spike and workspace (S)
 
-- Build a "hello kernel" in **both** cuda-oxide and cuTile Rust on an H100 and an RTX-class GPU: vector add, a tiled reduction, a fused RMSNorm. Record:
+> **Status (2026-11-09).**
+> - **Done without a GPU:**
+>   - toolchain investigation and decision record ([ADR 0001](decisions/0001-gpu-toolchain.md));
+>   - Cargo workspace;
+>   - CPU reference kernels for all of §7.2, with gradient checks;
+>   - first cuTile kernels (vector add, RMSNorm fwd, SwiGLU fwd) and cuda-oxide kernels (bitmask, embedding fwd/bwd, delays), all assembled to cubins for sm_80/89/90/100;
+>   - CUDA-wheel toolkit script;
+>   - CI workflow.
+> - **Remaining:** run `tests/cuda_parity.rs` and `s2s-simt-selftest` on a GPU; cuBLASLt/NCCL smoke tests via `cudarc`.
+
+- Build "hello kernels" in both cuTile Rust and cuda-oxide on an H100 and an RTX-class GPU: vector add, a tiled reduction, a fused RMSNorm, an atomic scatter-add. Record:
   - API ergonomics,
   - compile times,
   - supported arches,
@@ -745,7 +769,7 @@ The real constraint is **data**: licensed, diverse, conversational two-channel s
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
-| cuda-oxide / cuTile Rust immaturity (bugs, missing features, API churn) | High | Medium | `Backend` trait isolation; NVRTC CUDA-C fallback for every custom kernel; cuBLASLt/NCCL for the heavy lifting; M0 spike; pin versions |
+| CUDA Rust immaturity (cuTile and cuda-oxide are both pre-1.0: bugs, missing features, API churn) | High | Medium | `Backend` trait isolation; one pinned git revision for all CUDA Rust crates; driver-free cubin compile checks in CI for both models; cuBLASLt/NCCL for the heavy lifting; each kernel has a CPU reference to fall back on |
 | Kernel numerical bugs silently hurting training | Medium | High | CPU reference + golden fixtures + grad checks + PyTorch parity runs (M5) before any expensive training |
 | Achieved MFU too low in the custom stack | Medium | Medium | Profile early (Nsight); prioritize attention/GEMM/fused-CE; budget assumes 30–40% MFU |
 | Not enough conversational / tool-use speech data | High | High | Synthetic pipeline; Track A starting from duplex-trained weights; license-tagged data mix |
@@ -819,7 +843,8 @@ The model starts answering at frame 7, before `Tu` has finished transcribing the
 - Défossez et al., *Moshi: a speech-text foundation model for real-time dialogue*, Kyutai, 2024 (Moshi, Mimi, inner monologue, RQ-Transformer).
 - Kyutai, *Streaming Sequence-to-Sequence Learning with Delayed Streams Modeling*, arXiv 2509.08753 (DSM; Kyutai STT/TTS).
 - Kyutai STT: <https://kyutai.org/stt>
-- NVIDIA, *CUDA Rust* (cuda-oxide and cuTile Rust): <https://developer.nvidia.com/cuda/rust>, forum announcement: <https://forums.developer.nvidia.com/t/introducing-cuda-rust-two-tracks-for-writing-gpu-kernels/382704>
+- NVIDIA, *CUDA Rust* (cuda-oxide and cuTile Rust): <https://github.com/NVIDIA/cuda-rust> (formerly <https://github.com/NVlabs/cuda-oxide> and <https://github.com/NVlabs/cutile-rs>), <https://developer.nvidia.com/cuda/rust>, forum announcement: <https://forums.developer.nvidia.com/t/introducing-cuda-rust-two-tracks-for-writing-gpu-kernels/382704>
+- Elibol et al., *Fearless Concurrency on the GPU* (cuTile Rust), arXiv 2606.15991.
 - Dao et al., *FlashAttention-2* (2023) and Shah et al., *FlashAttention-3* (2024).
 - Rajbhandari et al., *ZeRO: Memory Optimizations Toward Training Trillion Parameter Models* (2020).
 - `cudarc` (Rust CUDA bindings), `llguidance` (constrained decoding), Hugging Face `tokenizers` and `safetensors`.

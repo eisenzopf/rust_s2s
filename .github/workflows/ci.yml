@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # Pinned NVIDIA CUDA Rust revision (keep in sync with Cargo.toml and
+  # crates/s2s-simt/Cargo.toml; see docs/decisions/0001-gpu-toolchain.md).
+  CUDA_RUST_REV: 367bc0f8e671070e00eebc7e5498f3e8eebefc72
+
+jobs:
+  # CPU reference kernels, gradient checks, lints and docs. No CUDA needed.
+  cpu:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  # cuTile Rust kernels: build against CUDA headers from NVIDIA's PyPI wheels,
+  # lower to Tile IR and assemble cubins with tileiras for sm_80/89/90/100.
+  # No GPU needed; GPU parity tests stay #[ignore]d here.
+  cuda-compile:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v4
+        with:
+          path: .cuda-wheels
+          key: cuda-wheels-13.5-${{ hashFiles('scripts/fetch-cuda-wheels.sh') }}
+      - name: Fetch CUDA toolkit wheels
+        run: |
+          test -x .cuda-wheels/nvidia/cu13/bin/tileiras || scripts/fetch-cuda-wheels.sh .cuda-wheels
+          root="$PWD/.cuda-wheels/nvidia/cu13"
+          echo "CUDA_TOOLKIT_PATH=$root" >> "$GITHUB_ENV"
+          echo "$root/bin" >> "$GITHUB_PATH"
+          echo "LD_LIBRARY_PATH=$root/lib" >> "$GITHUB_ENV"
+      - run: cargo clippy --workspace --all-targets --features s2s-kernels/cuda -- -D warnings
+      - name: cuTile kernels → Tile IR → cubin
+        run: cargo test -p s2s-kernels --features cuda
+        env:
+          S2S_REQUIRE_TILEIRAS: "1"
+
+  # cuda-oxide kernels: build through the cuda-oxide rustc backend (Rust
+  # 1.99.1), dump PTX, assemble cubins with ptxas for sm_80/89/90/100.
+  simt-compile:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Rust 1.99.1 for cuda-oxide
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal \
+            -c rust-src -c rustc-dev -c llvm-tools -c rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/s2s-simt
+      - uses: actions/cache@v4
+        with:
+          path: .cuda-wheels
+          key: cuda-wheels-13.5-${{ hashFiles('scripts/fetch-cuda-wheels.sh') }}
+      - name: Fetch CUDA toolkit wheels
+        run: |
+          test -x .cuda-wheels/nvidia/cu13/bin/ptxas || scripts/fetch-cuda-wheels.sh .cuda-wheels
+          root="$PWD/.cuda-wheels/nvidia/cu13"
+          echo "CUDA_TOOLKIT_PATH=$root" >> "$GITHUB_ENV"
+          echo "$root/bin" >> "$GITHUB_PATH"
+          echo "LD_LIBRARY_PATH=$root/lib" >> "$GITHUB_ENV"
+      - name: Install cargo-oxide
+        run: |
+          cargo +1.99.1 install --locked --git https://github.com/NVIDIA/cuda-rust \
+            --rev "$CUDA_RUST_REV" cargo-oxide
+      - run: cargo +1.99.1 fmt --check
+        working-directory: crates/s2s-simt
+      - run: cargo oxide doctor || true # informational; libdevice etc. are optional
+        working-directory: crates/s2s-simt
+      - name: cuda-oxide kernels → PTX → cubin
+        run: scripts/check-simt.sh
