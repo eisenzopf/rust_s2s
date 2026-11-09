@@ -460,3 +460,42 @@ fn real_checkpoint_round_trip() {
         assert_eq!(&y[..], &out[f * fs..(f + 1) * fs], "frame {f}");
     }
 }
+
+#[test]
+fn tokenize_round_trip_matches_streaming_codec() {
+    use s2s_mimi::{audio, tokenize};
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/mimi");
+    let cfg = s2s_mimi::MimiConfig::from_json(
+        &std::fs::read_to_string(root.join("reduced_config.json")).unwrap(),
+    )
+    .unwrap();
+    let mimi = s2s_mimi::Mimi::load(root.join("reduced.safetensors"), cfg).unwrap();
+    let dir = std::env::temp_dir().join(format!("s2s-mimi-tok-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // 2.5 frames of audio: the partial frame is zero-padded to 3 frames.
+    let pcm: Vec<f32> = (0..4800).map(|i| (i as f32 * 0.02).sin() * 0.3).collect();
+    let wav = dir.join("in.wav");
+    audio::write_wav_24k(&wav, &pcm).unwrap();
+    let codes_path = dir.join("in.codes.json");
+    let file = tokenize::encode_wav(&mimi, &wav, &codes_path).unwrap();
+    assert_eq!(file.frames.len(), 3);
+    assert_eq!(file.n_q, 4);
+    // Same codes as pushing the (quantized-to-16-bit, padded) samples through
+    // the streaming encoder directly.
+    let mut padded = audio::read_wav_mono_24k(&wav).unwrap();
+    padded.resize(3 * 1920, 0.0);
+    let mut enc = mimi.streaming_encoder();
+    for (f, row) in file.frames.iter().enumerate() {
+        assert_eq!(
+            row,
+            &enc.push_frame(&padded[f * 1920..(f + 1) * 1920]).unwrap()
+        );
+    }
+    let out = dir.join("out.wav");
+    assert_eq!(
+        tokenize::decode_to_wav(&mimi, &codes_path, &out).unwrap(),
+        3
+    );
+    assert_eq!(audio::read_wav_mono_24k(&out).unwrap().len(), 3 * 1920);
+    std::fs::remove_dir_all(&dir).ok();
+}

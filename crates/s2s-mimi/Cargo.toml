@@ -13,6 +13,8 @@ s2s-kernels.workspace = true
 safetensors.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# WAV I/O for the mimi-tokenize tool (pure Rust).
+hound = "3.5"
 
 [lints]
 workspace = true

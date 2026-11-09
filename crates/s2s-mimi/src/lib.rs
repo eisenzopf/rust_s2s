@@ -63,12 +63,14 @@
 
 #![forbid(unsafe_code)]
 
+pub mod audio;
 mod config;
 mod conv;
 mod error;
 mod model;
 mod quantizer;
 mod seanet;
+pub mod tokenize;
 mod transformer;
 mod types;
 mod weights;
