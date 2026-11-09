@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| Status | v0.2 — M0 in progress: workspace, CPU reference kernels, and first cuTile + cuda-oxide kernels built (see [ADR 0001](decisions/0001-gpu-toolchain.md)) |
+| Status | v0.3: everything verifiable without a GPU is built (see the status table in §12). Nothing has run on a GPU; no model trained beyond tiny CPU runs |
 | Scope | GPU kernels, training runtime, model, data pipeline, streaming server |
 | Primary references | Kyutai *Moshi* / *Mimi* (2024), Kyutai *Delayed Streams Modeling* (DSM, arXiv 2509.08753), NVIDIA *CUDA Rust* (cuda-oxide, cuTile Rust) |
 
@@ -603,6 +603,22 @@ Compute per tick has to stay under 80 ms at the target batch size to keep up wit
 
 ## 12. Milestones
 
+### Status at a glance (2026-11-09)
+
+| Milestone | Done without a GPU | Needs a GPU / external input |
+|---|---|---|
+| M0 Toolchain | Both CUDA Rust models build; all GPU kernels compile to cubins in CI; ADR 0001 | Run the kernels (`tests/cuda_parity.rs`, `s2s-simt-selftest`) |
+| M1 Tensor runtime | CPU reference kernels (fwd + bwd); `s2s-nn` layers; `s2s-cuda` cuBLASLt wrapper (compile-checked) | GPU tensor runtime behind the layers; parity on hardware |
+| M2 Attention / KV / sampling | KV-cache streaming step (CPU, = full forward to 1e-10); cuTile attention kernels exist upstream; cuda-oxide argmax + KV ring write | Flash-attention fwd/bwd on GPU; CUDA graphs; roofline numbers |
+| M3 Mimi | `s2s-mimi`: 100% code parity with Kyutai, streaming = offline; `mimi-tokenize` | Real checkpoint (Hugging Face blocked here); real-time speed |
+| M4 Duplex demo, Kyutai weights | `s2s-model::kyutai` (logits within 2.2e-5 of Kyutai); server + engine plumbing | Real Moshi/STT checkpoints; GPU speed |
+| M5 Trainer | Layers with explicit backward, whole-model gradient checks, AdamW/schedules, bit-exact resume | Same loop on GPU kernels |
+| M6 Distributed + data | DDP / ZeRO-1 / sharded checkpoints over `ThreadComm` (= single process); NCCL communicator (compile-checked); `s2s-data` shards/loader | Multi-GPU NCCL run; throughput / MFU |
+| M7 Multistream + DSM | `s2s-duplex` (gradient-checked, streaming = training to 1e-10, packed windows); STT/TTS engine modes; tiny model trains on synthetic dialogues | Real data; training at S scale |
+| M8 Tool calling | Grammar-constrained calls (llguidance); executor; injection; training data in the runtime's exact formats; engine e2e through the real server | A trained model that calls tools |
+| M9 Scale-up | Training driver `s2s-duplex-train` (exact resume) | Compute + data |
+| M10 Production | Server (backpressure, admission by session count, turn events), AWS GPU-test launcher | Admission by tick budget, FP8, load tests on GPUs |
+
 Each milestone has a concrete **exit criterion** that can be demonstrated. Sizes are rough, for a team of 2–3 experienced engineers (S ≈ 1–2 wk, M ≈ 3–5 wk, L ≈ 6–10 wk, XL ≈ 10+ wk, which depends mostly on compute and data rather than code).
 
 Tracks:
@@ -680,7 +696,7 @@ flowchart LR
 
 ### M4 — Full-duplex S2S demo with existing weights (M) ⭐ *first big de-risking milestone*
 
-> **Status (2026-11-09).** `s2s-model::kyutai`: CPU port of Kyutai's multistream LM (temporal transformer + depformer, KV-cached frame stepping, Moshi driver, DSM STT driver), loading Kyutai's candle checkpoints by name. Matches Kyutai's own `moshi` crate on reduced-size fixtures from `tools/kyutai-ref-lm` (logits within 1e-4, tokens exact); every full-size Kyutai config's tensor names/shapes are accepted. **Remaining:** run real checkpoints (HF download), Mimi integration, frame loop, server.
+> **Status (2026-11-09).** Also done since: Mimi (`s2s-mimi`) and the frame loop / server (`s2s-infer` + `s2s-server`); the engine runs our duplex model, and `MimiCodec` plugs Mimi in. `s2s-model::kyutai`: CPU port of Kyutai's multistream LM (temporal transformer + depformer, KV-cached frame stepping, Moshi driver, DSM STT driver), loading Kyutai's candle checkpoints by name. Matches Kyutai's own `moshi` crate on reduced-size fixtures from `tools/kyutai-ref-lm` (logits within 1e-4, tokens exact); every full-size Kyutai config's tensor names/shapes are accepted. **Remaining:** run real checkpoints (HF download), Mimi integration, frame loop, server.
 
 - `s2s-model` inference path for the Moshi layout (1 text slot, no `Tu`), loading Kyutai Moshi weights.
 - `s2s-infer` frame loop and `s2s-server` WebSocket + Opus, plus a minimal web client.
