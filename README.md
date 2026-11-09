@@ -100,6 +100,8 @@ cargo run --release -p s2s-infer --features cuda --bin s2s-kyutai-server -- \
 
 Open `http://127.0.0.1:8080/`, choose `s2s` and press Start (browsers allow the microphone on `localhost`; on a remote GPU box, forward the port, e.g. with SSM or `ssh -L`). `--stt-config config-stt-en_fr-hf.toml` with `kyutai/stt-1b-en_fr-candle` serves speech-to-text instead.
 
+To check the whole loop without a microphone, `scripts/e2e-speech.sh` (needs `espeak-ng`, `sox`, `pip install websockets numpy`) synthesizes a spoken question, streams it to the running server in real time with `scripts/s2s-client.py`, and transcribes the recorded reply with Kyutai STT through our stack (`cargo run -p s2s-infer --example transcribe`), so you can see what the model actually said. The script header lists the checkpoint paths it needs.
+
 The GPU parity tests compare `GpuLm` with the CPU port (`S2S_KYUTAI_LM_WEIGHTS` adds a Moshi 7B timing run):
 
 ```bash
