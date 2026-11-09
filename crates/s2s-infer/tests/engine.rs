@@ -311,3 +311,56 @@ async fn rejects_bad_sessions() {
         "codec/model codebook mismatch"
     );
 }
+
+fn reduced_mimi() -> Arc<s2s_mimi::Mimi> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/mimi");
+    let cfg = s2s_mimi::MimiConfig::from_json(
+        &std::fs::read_to_string(root.join("reduced_config.json")).unwrap(),
+    )
+    .unwrap();
+    Arc::new(s2s_mimi::Mimi::load(root.join("reduced.safetensors"), cfg).unwrap())
+}
+
+#[test]
+fn mimi_codec_matches_mimi_streaming() {
+    use s2s_infer::FrameCodec;
+    let mimi = reduced_mimi();
+    let mut codec = s2s_infer::MimiCodec::new(mimi.clone());
+    let mut enc = mimi.streaming_encoder();
+    let mut dec = mimi.streaming_decoder();
+    for f in 0..6 {
+        let pcm: Vec<f32> = (0..FRAME_SAMPLES)
+            .map(|n| ((n + f * FRAME_SAMPLES) as f32 * 0.03).sin() * 0.3)
+            .collect();
+        let codes = codec.encode(&pcm);
+        assert_eq!(codes, enc.push_frame(&pcm).unwrap());
+        assert_eq!(codec.decode(&codes), dec.push_frame(&codes).unwrap());
+    }
+    assert_eq!(codec.silence_codes().len(), codec.codebooks());
+}
+
+#[test]
+fn engine_rejects_a_codec_with_the_wrong_codebook_size() {
+    // The reduced test Mimi has 64-entry codebooks; the model's audio streams
+    // are laid out for 2048. Mismatches must fail loudly at session start,
+    // not decode out-of-range codes to silence.
+    let mimi = reduced_mimi();
+    let tok = ByteTokenizer;
+    let pad = TextTokenizer::special_id(&tok, special::PAD).unwrap();
+    let layout = StreamLayout {
+        codebooks: 4,
+        ..StreamLayout::default()
+    };
+    let cfg = DuplexConfig::tiny(layout, TextTokenizer::vocab_size(&tok) as usize, pad);
+    let model = Arc::new(DuplexModel::new(cfg, &mut SplitMix64::new(11)));
+    let m2 = mimi.clone();
+    let mut e = DuplexEngine::new(
+        model,
+        Arc::new(ByteTokenizer),
+        move || Box::new(s2s_infer::MimiCodec::new(m2.clone())),
+        EngineConfig::default(),
+    )
+    .unwrap();
+    let err = e.open_session(4, &SessionConfig::default()).unwrap_err();
+    assert!(err.to_string().contains("entries per codebook"), "{err}");
+}

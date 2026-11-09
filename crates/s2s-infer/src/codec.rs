@@ -1,6 +1,9 @@
 //! Audio codec interface for the engine.
 
+use std::sync::Arc;
+
 use s2s_core::streams::{CODEBOOK_SIZE, FRAME_SAMPLES, SAMPLE_RATE};
+use s2s_mimi::{Codes, DecoderState, EncoderState, Mimi};
 
 /// A streaming audio codec: one 80 ms frame of 24 kHz PCM in, one code per
 /// codebook out, and back. Implementations keep their own streaming state
@@ -8,6 +11,9 @@ use s2s_core::streams::{CODEBOOK_SIZE, FRAME_SAMPLES, SAMPLE_RATE};
 pub trait FrameCodec: Send {
     /// Codebooks per frame.
     fn codebooks(&self) -> usize;
+    /// Entries per codebook. The stream layout assumes `CODEBOOK_SIZE`
+    /// (audio tokens `0..CODEBOOK_SIZE`, plus `AUDIO_PAD`).
+    fn codebook_size(&self) -> u32;
     /// Encode one frame of `FRAME_SAMPLES` samples.
     fn encode(&mut self, pcm: &[f32]) -> Vec<u32>;
     /// Decode one frame of codes into `FRAME_SAMPLES` samples.
@@ -44,6 +50,10 @@ impl FrameCodec for ToneCodec {
         self.codebooks
     }
 
+    fn codebook_size(&self) -> u32 {
+        CODEBOOK_SIZE
+    }
+
     fn encode(&mut self, pcm: &[f32]) -> Vec<u32> {
         assert_eq!(pcm.len(), FRAME_SAMPLES);
         let rms = (pcm.iter().map(|x| x * x).sum::<f32>() / pcm.len() as f32).sqrt();
@@ -67,6 +77,73 @@ impl FrameCodec for ToneCodec {
 
     fn silence_codes(&self) -> Vec<u32> {
         vec![0; self.codebooks]
+    }
+}
+
+/// The Mimi codec (`s2s-mimi`) as a [`FrameCodec`]. One loaded model is
+/// shared by every session (`Arc<Mimi>`); each codec instance holds one
+/// session's streaming encoder and decoder state.
+#[derive(Clone, Debug)]
+pub struct MimiCodec {
+    mimi: Arc<Mimi>,
+    enc: EncoderState,
+    dec: DecoderState,
+    silence: Vec<u32>,
+}
+
+impl MimiCodec {
+    /// A new session codec over a shared model.
+    ///
+    /// # Panics
+    /// If the model is not mono or its frame size is not `FRAME_SAMPLES`.
+    pub fn new(mimi: Arc<Mimi>) -> Self {
+        let cfg = mimi.config();
+        assert_eq!(cfg.channels, 1, "the engine streams mono audio");
+        assert_eq!(
+            cfg.frame_size(),
+            FRAME_SAMPLES,
+            "Mimi frame size must be 80 ms at 24 kHz"
+        );
+        // The codes Mimi assigns to a silent frame from a fresh state.
+        let silence = mimi
+            .encode_step(&mut mimi.encoder_state(), &[0.0; FRAME_SAMPLES])
+            .map(|c| c.frame(0))
+            .unwrap_or_else(|_| vec![0; cfg.quantizer_n_q]);
+        Self {
+            enc: mimi.encoder_state(),
+            dec: mimi.decoder_state(),
+            silence,
+            mimi,
+        }
+    }
+}
+
+impl FrameCodec for MimiCodec {
+    fn codebooks(&self) -> usize {
+        self.mimi.config().quantizer_n_q
+    }
+
+    fn codebook_size(&self) -> u32 {
+        self.mimi.config().quantizer_bins as u32
+    }
+
+    fn encode(&mut self, pcm: &[f32]) -> Vec<u32> {
+        // Exactly one frame in gives exactly one code frame out; on an
+        // (unexpected) error, fall back to silence rather than stall the clock.
+        match self.mimi.encode_step(&mut self.enc, pcm) {
+            Ok(c) if c.frames() == 1 => c.frame(0),
+            _ => self.silence.clone(),
+        }
+    }
+
+    fn decode(&mut self, codes: &[u32]) -> Vec<f32> {
+        Codes::new(codes.len(), 1, codes.to_vec())
+            .and_then(|c| self.mimi.decode_step(&mut self.dec, &c))
+            .unwrap_or_else(|_| vec![0.0; FRAME_SAMPLES])
+    }
+
+    fn silence_codes(&self) -> Vec<u32> {
+        self.silence.clone()
     }
 }
 

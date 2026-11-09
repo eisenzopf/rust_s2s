@@ -523,6 +523,13 @@ impl<K: Tokenizer> Engine for DuplexEngine<K> {
                 "codec codebooks differ from the model layout".into(),
             ));
         }
+        if codec.codebook_size() != s2s_core::streams::CODEBOOK_SIZE {
+            return Err(EngineError::Rejected(format!(
+                "codec has {} entries per codebook; the stream layout needs {}",
+                codec.codebook_size(),
+                s2s_core::streams::CODEBOOK_SIZE
+            )));
+        }
 
         let mut state = self.model.new_state();
         // The "frame -1" start position, then the system segment, exactly as

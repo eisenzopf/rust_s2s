@@ -22,8 +22,8 @@
 //! `tool.result` arrives.
 //!
 //! The codec is pluggable: [`ToneCodec`] is a deterministic stand-in for
-//! development and tests; Mimi (`s2s-mimi`) implements [`FrameCodec`] for real
-//! use.
+//! development and tests; [`MimiCodec`] wraps the Mimi codec (`s2s-mimi`) for
+//! real use.
 
 #![forbid(unsafe_code)]
 
@@ -31,6 +31,6 @@ mod codec;
 mod engine;
 pub mod tokenizer;
 
-pub use codec::{FrameCodec, ToneCodec};
+pub use codec::{FrameCodec, MimiCodec, ToneCodec};
 pub use engine::{DuplexEngine, EngineConfig};
 pub use tokenizer::Tokenizer;
