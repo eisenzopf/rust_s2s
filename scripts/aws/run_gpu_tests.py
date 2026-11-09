@@ -13,9 +13,10 @@ What it does:
   4. Waits for the log, prints it, and terminates the instance explicitly
      (also on errors and Ctrl-C).
 
-Credentials come from the normal AWS environment (AWS_ACCESS_KEY_ID,
-AWS_SECRET_ACCESS_KEY, optional AWS_SESSION_TOKEN). Minimal IAM permissions
-are in scripts/aws/iam-policy.json.
+Credentials: S2S_AWS_ACCESS_KEY_ID / S2S_AWS_SECRET_ACCESS_KEY (optional
+S2S_AWS_SESSION_TOKEN) if set, else the normal AWS credential chain. The
+S2S_-prefixed names exist because some sandboxes pre-set AWS_ACCESS_KEY_ID to a
+placeholder. Minimal IAM permissions are in scripts/aws/iam-policy.json.
 
 Usage:
   python3 scripts/aws/run_gpu_tests.py [--region us-east-1] [--instance-type g6.xlarge]
@@ -26,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import os
 import pathlib
 import re
 import subprocess
@@ -103,7 +105,15 @@ def main() -> None:
     import boto3  # imported late so --dry-run works without boto3
     from botocore.exceptions import ClientError
 
-    session = boto3.Session(region_name=args.region)
+    creds = {}
+    if os.environ.get("S2S_AWS_ACCESS_KEY_ID"):
+        creds = {
+            "aws_access_key_id": os.environ["S2S_AWS_ACCESS_KEY_ID"],
+            "aws_secret_access_key": os.environ["S2S_AWS_SECRET_ACCESS_KEY"],
+            "aws_session_token": os.environ.get("S2S_AWS_SESSION_TOKEN") or None,
+        }
+    session = boto3.Session(region_name=os.environ.get("S2S_AWS_REGION", args.region), **creds)
+    args.region = session.region_name
     account = session.client("sts").get_caller_identity()["Account"]
     print(f"AWS account {account}, region {args.region}")
 
