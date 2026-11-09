@@ -1,0 +1,66 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "Identity",
+      "Effect": "Allow",
+      "Action": "sts:GetCallerIdentity",
+      "Resource": "*"
+    },
+    {
+      "Sid": "FindDeepLearningAmi",
+      "Effect": "Allow",
+      "Action": ["ssm:GetParameter", "ec2:DescribeImages"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "LaunchOnlyAmpereOrNewerGpuInstances",
+      "Effect": "Allow",
+      "Action": "ec2:RunInstances",
+      "Resource": "arn:aws:ec2:*:*:instance/*",
+      "Condition": {
+        "StringLike": { "ec2:InstanceType": ["g5.*", "g6.*", "g6e.*", "p4d.*", "p5.*"] }
+      }
+    },
+    {
+      "Sid": "LaunchSupportingResources",
+      "Effect": "Allow",
+      "Action": "ec2:RunInstances",
+      "Resource": [
+        "arn:aws:ec2:*::image/*",
+        "arn:aws:ec2:*:*:network-interface/*",
+        "arn:aws:ec2:*:*:security-group/*",
+        "arn:aws:ec2:*:*:subnet/*",
+        "arn:aws:ec2:*:*:volume/*"
+      ]
+    },
+    {
+      "Sid": "TagOnLaunch",
+      "Effect": "Allow",
+      "Action": "ec2:CreateTags",
+      "Resource": "*",
+      "Condition": { "StringEquals": { "ec2:CreateAction": "RunInstances" } }
+    },
+    {
+      "Sid": "WatchAndTerminateOwnInstances",
+      "Effect": "Allow",
+      "Action": ["ec2:DescribeInstances", "ec2:GetConsoleOutput", "ec2:TerminateInstances"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "LogBucket",
+      "Effect": "Allow",
+      "Action": [
+        "s3:CreateBucket",
+        "s3:PutBucketPublicAccessBlock",
+        "s3:ListBucket",
+        "s3:GetObject",
+        "s3:PutObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::rust-s2s-gpu-tests-*",
+        "arn:aws:s3:::rust-s2s-gpu-tests-*/*"
+      ]
+    }
+  ]
+}

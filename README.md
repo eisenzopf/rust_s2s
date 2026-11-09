@@ -49,3 +49,13 @@ On a machine with an sm_80+ GPU and a CUDA 13 driver, run the GPU parity checks 
 cargo test -p s2s-kernels --features cuda --test cuda_parity -- --ignored   # cuTile
 (cd crates/s2s-simt && cargo oxide run)                                     # cuda-oxide
 ```
+
+### GPU tests on AWS
+
+`scripts/aws/run_gpu_tests.py` runs all of the above on a short-lived EC2 GPU instance (default `g6.xlarge`, NVIDIA L4) that terminates itself when done, with a hard 2-hour deadline. It needs AWS credentials in the environment. `scripts/aws/iam-policy.json` is a minimal IAM policy for it: it may launch only Ampere-or-newer GPU instances and write only to its own log bucket.
+
+```bash
+python3 scripts/aws/run_gpu_tests.py --dry-run   # show the plan, no AWS calls
+python3 scripts/aws/run_gpu_tests.py             # launch, wait, print the log, terminate
+```
+
