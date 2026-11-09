@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/s2s-core", "crates/s2s-kernels"]
+members = ["crates/s2s-core", "crates/s2s-kernels", "crates/s2s-nn", "crates/s2s-train"]
 # cuda-oxide crate: own toolchain (Rust 1.99.1), built with `cargo oxide`.
 exclude = ["crates/s2s-simt"]
 
@@ -13,6 +13,11 @@ repository = "https://github.com/eisenzopf/rust_s2s"
 
 [workspace.dependencies]
 s2s-core = { path = "crates/s2s-core" }
+s2s-kernels = { path = "crates/s2s-kernels" }
+s2s-nn = { path = "crates/s2s-nn" }
+safetensors = "0.7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 num-traits = "0.2"
 # NVIDIA CUDA Rust (github.com/NVIDIA/cuda-rust, formerly NVlabs/cutile-rs and
 # NVlabs/cuda-oxide). Every CUDA Rust crate comes from this one pinned
@@ -30,3 +35,13 @@ missing_debug_implementations = "warn"
 [workspace.lints.clippy]
 needless_range_loop = "allow"
 too_many_arguments = "allow"
+
+# The CPU reference kernels are naive loops; optimize them even in test/dev
+# builds so CPU training tests run in seconds instead of minutes.
+[profile.dev.package.s2s-kernels]
+opt-level = 3
+[profile.dev.package.s2s-nn]
+opt-level = 3
+# Generic layer/kernel code is compiled in the crate that instantiates it.
+[profile.dev.package.s2s-train]
+opt-level = 3

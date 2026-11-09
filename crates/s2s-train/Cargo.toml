@@ -1,0 +1,19 @@
+[package]
+name = "s2s-train"
+description = "Training loop pieces for rust_s2s: AdamW with parameter groups, LR schedules, safetensors checkpoints with exact resume."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+s2s-core.workspace = true
+s2s-kernels.workspace = true
+s2s-nn.workspace = true
+safetensors.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

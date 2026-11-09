@@ -1,0 +1,15 @@
+[package]
+name = "s2s-nn"
+description = "Neural-network layers for rust_s2s with explicit forward/backward passes (Linear, RMSNorm, GQA attention with RoPE, SwiGLU MLP, transformer blocks, a transformer LM)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+s2s-core.workspace = true
+s2s-kernels.workspace = true
+
+[lints]
+workspace = true

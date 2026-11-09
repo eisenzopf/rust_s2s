@@ -1,0 +1,4 @@
+the model listens while it speaks. it hears the user, writes down what it hears, thinks in text, and talks back in its own voice.
+when the user asks for the weather, the model says let me check, calls a tool, waits for the answer, and then tells the user what it found.
+every eighty milliseconds the model reads one frame of sound and writes one frame of sound. the text runs a little ahead of the voice.
+the user can interrupt at any time. the model stops, listens, and answers the new question instead.
