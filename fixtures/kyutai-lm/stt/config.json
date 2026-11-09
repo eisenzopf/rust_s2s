@@ -1,0 +1,51 @@
+{
+  "driver": {
+    "asr_delay_in_tokens": 3,
+    "conditioning_delay": 0.5,
+    "kind": "asr",
+    "temperature": 0.0
+  },
+  "lm": {
+    "audio_codebooks": 8,
+    "audio_vocab_size": 17,
+    "conditioners": {
+      "delay": {
+        "dim": 16,
+        "max_period": 100.0,
+        "scale_factor": 4.0,
+        "type": "ContinuousAttribute"
+      }
+    },
+    "depformer": null,
+    "extra_heads": {
+      "dim": 6,
+      "num_heads": 2
+    },
+    "text_in_vocab_size": 33,
+    "text_out_vocab_size": 32,
+    "transformer": {
+      "bias_attn": false,
+      "bias_ff": false,
+      "causal": true,
+      "context": 6,
+      "conv_kernel_size": 3,
+      "conv_layout": false,
+      "cross_attention": null,
+      "d_model": 48,
+      "dim_feedforward": 192,
+      "gating": "silu",
+      "kv_repeat": 1,
+      "layer_scale": null,
+      "max_period": 100000,
+      "max_seq_len": 4096,
+      "norm": "RmsNorm",
+      "norm_first": true,
+      "num_heads": 4,
+      "num_layers": 2,
+      "positional_embedding": "Rope",
+      "shared_cross_attn": false,
+      "use_conv_bias": true,
+      "use_conv_block": false
+    }
+  }
+}

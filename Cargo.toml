@@ -1,8 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["crates/s2s-core", "crates/s2s-kernels", "crates/s2s-nn", "crates/s2s-train"]
+members = ["crates/s2s-core", "crates/s2s-kernels", "crates/s2s-model", "crates/s2s-nn", "crates/s2s-train"]
 # cuda-oxide crate: own toolchain (Rust 1.99.1), built with `cargo oxide`.
-exclude = ["crates/s2s-simt"]
+# kyutai-ref-lm: fixture generator with its own dependency tree (Kyutai's
+# `moshi` crate + candle); see tools/kyutai-ref-lm.
+exclude = ["crates/s2s-simt", "tools/kyutai-ref-lm"]
 
 [workspace.package]
 version = "0.1.0"
@@ -14,10 +16,12 @@ repository = "https://github.com/eisenzopf/rust_s2s"
 [workspace.dependencies]
 s2s-core = { path = "crates/s2s-core" }
 s2s-kernels = { path = "crates/s2s-kernels" }
+s2s-model = { path = "crates/s2s-model" }
 s2s-nn = { path = "crates/s2s-nn" }
 safetensors = "0.7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+toml = "0.8"
 num-traits = "0.2"
 # NVIDIA CUDA Rust (github.com/NVIDIA/cuda-rust, formerly NVlabs/cutile-rs and
 # NVlabs/cuda-oxide). Every CUDA Rust crate comes from this one pinned
@@ -44,4 +48,6 @@ opt-level = 3
 opt-level = 3
 # Generic layer/kernel code is compiled in the crate that instantiates it.
 [profile.dev.package.s2s-train]
+opt-level = 3
+[profile.dev.package.s2s-model]
 opt-level = 3

@@ -680,6 +680,8 @@ flowchart LR
 
 ### M4 — Full-duplex S2S demo with existing weights (M) ⭐ *first big de-risking milestone*
 
+> **Status (2026-11-09).** `s2s-model::kyutai`: CPU port of Kyutai's multistream LM (temporal transformer + depformer, KV-cached frame stepping, Moshi driver, DSM STT driver), loading Kyutai's candle checkpoints by name. Matches Kyutai's own `moshi` crate on reduced-size fixtures from `tools/kyutai-ref-lm` (logits within 1e-4, tokens exact); every full-size Kyutai config's tensor names/shapes are accepted. **Remaining:** run real checkpoints (HF download), Mimi integration, frame loop, server.
+
 - `s2s-model` inference path for the Moshi layout (1 text slot, no `Tu`), loading Kyutai Moshi weights.
 - `s2s-infer` frame loop and `s2s-server` WebSocket + Opus, plus a minimal web client.
 - **Exit:**
