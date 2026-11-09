@@ -20,7 +20,7 @@ cargo oxide inspect > "$OUT/inspect.txt"
 # The PTX follows the "PTX (<name>.ptx)" banner and its separator line.
 awk 'f>=2{print} /^PTX \(/{f=1;next} f==1&&/^=+$/{f=2}' "$OUT/inspect.txt" > "$OUT/s2s_simt.ptx"
 
-for kernel in apply_token_bitmask embedding_sum_fwd embedding_sum_bwd apply_delays; do
+for kernel in apply_token_bitmask embedding_sum_fwd embedding_sum_bwd apply_delays argmax_rows kv_ring_write; do
   grep -q "\.entry ${kernel}(" "$OUT/s2s_simt.ptx" || { echo "missing kernel: $kernel"; exit 1; }
 done
 

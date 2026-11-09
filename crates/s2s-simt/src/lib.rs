@@ -11,6 +11,8 @@
 //! | [`kernels::embedding_sum_fwd`] | 7 | `s2s_kernels::reference::embedding::embedding_sum_fwd` |
 //! | [`kernels::embedding_sum_bwd`] | 7 | `s2s_kernels::reference::embedding::embedding_sum_bwd` |
 //! | [`kernels::apply_delays`] | 20 | `s2s_kernels::reference::delay::apply_delays` |
+//! | [`kernels::argmax_rows`] | 13 | greedy `s2s_kernels::reference::sampling::sample` |
+//! | [`kernels::kv_ring_write`] | 12 | (inline in the self-test) |
 //!
 //! **Status: M0.** These compile to PTX through cuda-oxide and assemble with
 //! `ptxas` for every target without a GPU. They have not yet run on a GPU;
@@ -38,7 +40,7 @@ pub const NO_TOKEN: u32 = u32::MAX;
 #[cuda_module]
 pub mod kernels {
     use cuda_device::atomic::{AtomicOrdering, DeviceAtomicF32};
-    use cuda_device::{DisjointSlice, kernel, launch_bounds, launch_contract, thread};
+    use cuda_device::{DisjointSlice, kernel, launch_bounds, launch_contract, thread, warp};
 
     /// Set logits of tokens not allowed by a bitmask to `-inf`.
     ///
@@ -155,6 +157,93 @@ pub mod kernels {
             } else {
                 pad[s]
             };
+        }
+    }
+
+    /// Greedy decoding: index of the largest logit in each row, one warp
+    /// per row. Lanes scan strided columns, then a shuffle-xor butterfly
+    /// reduces `(value, index)` pairs; ties go to the lower index, matching
+    /// the CPU reference. A row where every logit is `-inf` (fully masked)
+    /// yields `u32::MAX`. Launch `rows * 32` threads (rounded up to whole
+    /// blocks); `out` has one slot per row.
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub fn argmax_rows(
+        logits: &[f32],
+        rows: u32,
+        v: u32,
+        mut out: DisjointSlice<u32, thread::WarpIndex>,
+    ) {
+        let gid = thread::index_1d().get();
+        let (row, lane) = (gid / 32, (gid % 32) as u32);
+        let (rows, v) = (rows as usize, v as usize);
+        let mut best = f32::NEG_INFINITY;
+        let mut idx = u32::MAX;
+        if row < rows {
+            let mut i = lane as usize;
+            while i < v {
+                let x = logits[row * v + i];
+                if x > best {
+                    best = x;
+                    idx = i as u32;
+                }
+                i += 32;
+            }
+        }
+        // Every lane of every (full) warp reaches the shuffles.
+        let mut offset = 16u32;
+        while offset > 0 {
+            let other_best = warp::shuffle_xor_f32(best, offset);
+            let other_idx = warp::shuffle_xor(idx, offset);
+            if other_best > best || (other_best == best && other_idx < idx) {
+                best = other_best;
+                idx = other_idx;
+            }
+            offset /= 2;
+        }
+        if let Some(w) = thread::warp_index()
+            && let Some(slot) = out.get_mut(w)
+        {
+            *slot = idx;
+        }
+    }
+
+    /// KV-cache ring-buffer write: copy `t` new rows of `width` floats into a
+    /// cache of `capacity` rows, starting at slot `start` and wrapping
+    /// around (sliding-window attention, plan §10.4).
+    ///
+    /// Written gather-style, one thread per **cache** element, so every write
+    /// goes through the thread's own `DisjointSlice` slot with no `unsafe`;
+    /// threads whose slot receives no new row leave it untouched. That costs
+    /// one launch over the whole cache per write: fine for M0, and the place
+    /// to optimize (with a launch over just the new rows) once it shows up in
+    /// profiles.
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub fn kv_ring_write(
+        new_rows: &[f32],
+        t: u32,
+        start: u32,
+        capacity: u32,
+        width: u32,
+        mut cache: DisjointSlice<f32>,
+    ) {
+        let idx = thread::index_1d();
+        let i = idx.get();
+        let (t, start, capacity, width) = (
+            t as usize,
+            start as usize,
+            capacity as usize,
+            width as usize,
+        );
+        if let Some(c) = cache.get_mut(idx) {
+            let (slot, col) = (i / width, i % width);
+            let k = (slot + capacity - start % capacity) % capacity;
+            if k < t {
+                *c = new_rows[k * width + col];
+            }
         }
     }
 }

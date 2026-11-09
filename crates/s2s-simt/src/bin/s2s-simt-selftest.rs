@@ -10,6 +10,7 @@
 use cuda_core::{CudaContext, DeviceBuffer, LaunchConfig1D};
 use cuda_device::atomic::DeviceAtomicF32;
 use s2s_core::SplitMix64;
+use s2s_kernels::reference::sampling::SamplingParams;
 use s2s_kernels::reference::{delay, embedding, sampling};
 use s2s_simt::{BLOCK, NO_TOKEN, blocks_for, kernels};
 
@@ -174,6 +175,68 @@ fn main() -> Res<()> {
             return Err("apply_delays: mismatch".into());
         }
         println!("PASSED apply_delays ({} tokens)", gpu.len());
+    }
+
+    // --- argmax_rows ------------------------------------------------------
+    {
+        let (rows, v) = (37usize, 2049usize); // audio vocab incl. pad token
+        let mut logits: Vec<f32> = rng.normal_vec(rows * v, 2.0);
+        // Ties: row 1 has two equal maxima; the lower index must win.
+        logits[v + 100] = 50.0;
+        logits[v + 7] = 50.0;
+        // Row 2 is fully masked.
+        logits[2 * v..3 * v]
+            .iter_mut()
+            .for_each(|x| *x = f32::NEG_INFINITY);
+        let cpu: Vec<u32> = (0..rows)
+            .map(|r| {
+                sampling::sample(&logits[r * v..(r + 1) * v], &SamplingParams::GREEDY, 0.0)
+                    .map_or(u32::MAX, |i| i as u32)
+            })
+            .collect();
+        let logits_dev = DeviceBuffer::from_host(&stream, &logits)?;
+        let mut out_dev = DeviceBuffer::<u32>::zeroed(&stream, rows)?;
+        let prepared = module.prepare_argmax_rows(cfg(rows * 32))?;
+        module.argmax_rows(
+            &stream,
+            &prepared,
+            &logits_dev,
+            rows as u32,
+            v as u32,
+            &mut out_dev,
+        )?;
+        let gpu = out_dev.to_host_vec(&stream)?;
+        if gpu != cpu {
+            return Err(format!("argmax_rows: gpu {gpu:?} vs cpu {cpu:?}").into());
+        }
+        println!("PASSED argmax_rows ({rows} rows)");
+    }
+
+    // --- kv_ring_write ----------------------------------------------------
+    {
+        let (capacity, width, t, start) = (10usize, 24usize, 4usize, 8usize); // wraps
+        let cache0: Vec<f32> = rng.normal_vec(capacity * width, 1.0);
+        let new_rows: Vec<f32> = rng.normal_vec(t * width, 1.0);
+        let mut cpu = cache0.clone();
+        for k in 0..t {
+            let slot = (start + k) % capacity;
+            cpu[slot * width..(slot + 1) * width]
+                .copy_from_slice(&new_rows[k * width..(k + 1) * width]);
+        }
+        let new_dev = DeviceBuffer::from_host(&stream, &new_rows)?;
+        let mut cache_dev = DeviceBuffer::from_host(&stream, &cache0)?;
+        let prepared = module.prepare_kv_ring_write(cfg(capacity * width))?;
+        module.kv_ring_write(
+            &stream,
+            &prepared,
+            &new_dev,
+            t as u32,
+            start as u32,
+            capacity as u32,
+            width as u32,
+            &mut cache_dev,
+        )?;
+        check_close("kv_ring_write", &cache_dev.to_host_vec(&stream)?, &cpu, 0.0)?;
     }
 
     println!("ALL PASSED");
