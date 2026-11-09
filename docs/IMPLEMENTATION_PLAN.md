@@ -624,7 +624,12 @@ Compute per tick has to stay under 80 ms at the target batch size to keep up wit
 **Next steps, in order:**
 
 1. ~~**First GPU run.**~~ Done 2026-11-09 on a persistent GPU dev box (AWS `g6e.4xlarge`, L40S): every cuTile, cuda-oxide and `s2s-cuda` GPU test passes (see ADR 0001). `scripts/aws/run_gpu_tests.py` remains for one-shot runs on fresh instances.
-2. **Real weights.** Download Mimi, Moshi and `stt-1b-en_fr` (candle checkpoints) and Kyutai's text tokenizer (convert `tokenizer_spm_*.model` to `tokenizer.json`), then run the ignored tests and serve `KyutaiEngine` with `MimiCodec`. Needs huggingface.co access, which the cloud dev environment blocks.
+2. **Real weights.** Mostly done 2026-11-09 on the GPU dev box (all on CPU, release build):
+   - Mimi (`tokenizer-e351c8d8-checkpoint125.safetensors`): loads, round-trips, streaming = offline (`real_checkpoint_round_trip`). CPU RTF 0.78.
+   - Moshi 7B (`kyutai/moshiko-candle-bf16`): all 523 tensors used, none unused; greedy decoding finite and deterministic (`real_checkpoint_runs`). 30 GB RSS in f32, ~18 s per step on CPU.
+   - STT 1B (`kyutai/stt-1b-en_fr-candle`): espeak-ng speech → `mimi-tokenize` (32 codebooks) → `real_stt_transcribes_codes` → SentencePiece decode gives the spoken sentence word for word ("Hello, I would like to check the weather in Paris tomorrow, and then book a table for two at 7pm."). 89 s for 9.5 s of audio on CPU.
+   - Text tokenizers: `scripts/spm-to-tokenizer-json.py` converts Kyutai's SentencePiece models to `tokenizer.json` and checks them against sentencepiece (Moshi 32k: 44686/44691 lines of the repo identical, the rest exact score ties; STT 8k: identical except text that spells out `<pad>`). `s2s-tokenizer` loads both; the Moshi one is canonical.
+   - Remaining: serve `KyutaiEngine` + `MimiCodec` from the `s2s-server` binary. It needs step 3 to run in real time.
 3. **GPU tensor runtime (M1/M2).** Put the cuTile / cuda-oxide kernels behind `s2s-nn` layers, with parity against the CPU references, then real-time inference for M4.
 4. **Training at scale (M5–M9).** Real data, then `s2s-duplex-train` on GPU kernels.
 
