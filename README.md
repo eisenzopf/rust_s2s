@@ -13,7 +13,7 @@ A full-duplex speech-to-speech model (STT + LLM + TTS + tool calling fused into 
 - Mimi and Kyutai-LM ports that match Kyutai's own code;
 - GPU kernels in both CUDA Rust models.
 
-**Nothing has run on a GPU yet**, and no model has been trained beyond tiny CPU runs. See the plan's milestone status notes.
+**Every GPU kernel has now run on a GPU** (NVIDIA L40S, sm_89) and matches its CPU reference: 7 cuTile kernels, 6 cuda-oxide kernels, and the cuBLASLt / NCCL / cuTile-interop tests in `s2s-cuda`. The layers do not use the GPU kernels yet, and no model has been trained beyond tiny CPU runs. See the plan's milestone status notes.
 
 ## Layout
 
@@ -68,7 +68,10 @@ On a machine with an sm_80+ GPU and a CUDA 13 driver, run the GPU parity checks 
 ```bash
 cargo test -p s2s-kernels --features cuda --test cuda_parity -- --ignored   # cuTile
 (cd crates/s2s-simt && cargo oxide run)                                     # cuda-oxide
+cargo test -p s2s-cuda --features cuda --test gpu -- --ignored              # cuBLASLt, NCCL, interop
 ```
+
+The `s2s-cuda` tests open cuBLASLt and NCCL at run time. If the machine has neither, `S2S_CUDA_RUNTIME_LIBS=1 scripts/fetch-cuda-wheels.sh` adds both to the wheel toolkit tree.
 
 ### Train and serve (CPU today)
 

@@ -9,6 +9,9 @@
 #     nvJitLink for `cargo oxide doctor`.
 # Running kernels still needs a real GPU and NVIDIA driver.
 #
+# With S2S_CUDA_RUNTIME_LIBS=1 it also fetches the libraries that s2s-cuda
+# opens at run time on a GPU machine: cuBLAS/cuBLASLt and NCCL (~750 MB).
+#
 # Usage: scripts/fetch-cuda-wheels.sh [DEST]   (default: .cuda-wheels)
 # Then:  export CUDA_TOOLKIT_PATH="$DEST/nvidia/cu13"
 #        export PATH="$CUDA_TOOLKIT_PATH/bin:$PATH" LD_LIBRARY_PATH="$CUDA_TOOLKIT_PATH/lib"
@@ -27,6 +30,12 @@ python3 -m pip download --no-deps --quiet --dest "$DEST/wheels" \
   "nvidia-nvjitlink==${CUDA_VER}" \
   "nvidia-curand==10.*"
 
+if [ "${S2S_CUDA_RUNTIME_LIBS:-0}" = 1 ]; then
+  python3 -m pip download --no-deps --quiet --dest "$DEST/wheels" \
+    "nvidia-cublas==13.*" \
+    "nvidia-nccl-cu13==2.*"
+fi
+
 for whl in "$DEST"/wheels/*.whl; do
   python3 -I -m zipfile -e "$whl" "$DEST/"
 done
@@ -40,6 +49,11 @@ mkdir -p "$ROOT/nvvm/lib64"
 ln -sf "$(cd "$ROOT/lib" && pwd)/libnvvm.so.4" "$ROOT/nvvm/lib64/libnvvm.so"
 ln -sf libnvvm.so.4 "$ROOT/lib/libnvvm.so"
 ln -sf libnvJitLink.so.13 "$ROOT/lib/libnvJitLink.so"
+# The NCCL wheel installs to nvidia/nccl and names its library libnccl.so.2,
+# which cudarc does not search for; link it into the toolkit lib directory.
+if [ -f "$DEST/nvidia/nccl/lib/libnccl.so.2" ]; then
+  ln -sf "$(cd "$DEST/nvidia/nccl/lib" && pwd)/libnccl.so.2" "$ROOT/lib/libnccl.so"
+fi
 
 test -f "$ROOT/include/cuda.h"
 test -f "$ROOT/include/crt/host_config.h"

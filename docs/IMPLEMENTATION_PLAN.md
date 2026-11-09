@@ -607,7 +607,7 @@ Compute per tick has to stay under 80 ms at the target batch size to keep up wit
 
 | Milestone | Done without a GPU | Needs a GPU / external input |
 |---|---|---|
-| M0 Toolchain | Both CUDA Rust models build; all GPU kernels compile to cubins in CI; ADR 0001 | Run the kernels (`tests/cuda_parity.rs`, `s2s-simt-selftest`) |
+| M0 Toolchain | Both CUDA Rust models build; all GPU kernels compile to cubins in CI; ADR 0001; **all kernels and cuBLASLt/NCCL smoke tests pass on an L40S** | Self-hosted GPU CI job; an H100 run |
 | M1 Tensor runtime | CPU reference kernels (fwd + bwd); `s2s-nn` layers; `s2s-cuda` cuBLASLt wrapper (compile-checked) | GPU tensor runtime behind the layers; parity on hardware |
 | M2 Attention / KV / sampling | KV-cache streaming step (CPU, = full forward to 1e-10); cuTile attention kernels exist upstream; cuda-oxide argmax + KV ring write | Flash-attention fwd/bwd on GPU; CUDA graphs; roofline numbers |
 | M3 Mimi | `s2s-mimi`: 100% code parity with Kyutai, streaming = offline; `mimi-tokenize` | Real checkpoint (Hugging Face blocked here); real-time speed |
@@ -623,7 +623,7 @@ Compute per tick has to stay under 80 ms at the target batch size to keep up wit
 
 **Next steps, in order:**
 
-1. **First GPU run (owner, locally).** The cloud dev environment has no AWS credentials, so the owner runs `scripts/aws/run_gpu_tests.py` from their own machine (it uses the normal AWS credential chain, e.g. an SSO login or `AWS_PROFILE`; needs `boto3`). It launches one `g6.xlarge` (L4), runs the GPU tests, prints the log and terminates the instance (hard 2-hour deadline). Bring the log back; failures there are the next work items.
+1. ~~**First GPU run.**~~ Done 2026-11-09 on a persistent GPU dev box (AWS `g6e.4xlarge`, L40S): every cuTile, cuda-oxide and `s2s-cuda` GPU test passes (see ADR 0001). `scripts/aws/run_gpu_tests.py` remains for one-shot runs on fresh instances.
 2. **Real weights.** Download Mimi, Moshi and `stt-1b-en_fr` (candle checkpoints) and Kyutai's text tokenizer (convert `tokenizer_spm_*.model` to `tokenizer.json`), then run the ignored tests and serve `KyutaiEngine` with `MimiCodec`. Needs huggingface.co access, which the cloud dev environment blocks.
 3. **GPU tensor runtime (M1/M2).** Put the cuTile / cuda-oxide kernels behind `s2s-nn` layers, with parity against the CPU references, then real-time inference for M4.
 4. **Training at scale (M5–M9).** Real data, then `s2s-duplex-train` on GPU kernels.
@@ -665,7 +665,8 @@ flowchart LR
 >   - first cuTile kernels (vector add, RMSNorm fwd, SwiGLU fwd) and cuda-oxide kernels (bitmask, embedding fwd/bwd, delays), all assembled to cubins for sm_80/89/90/100;
 >   - CUDA-wheel toolkit script;
 >   - CI workflow.
-> - **Remaining:** run `tests/cuda_parity.rs` and `s2s-simt-selftest` on a GPU; cuBLASLt/NCCL smoke tests via `cudarc`.
+> - **Done on a GPU (L40S, 2026-11-09):** `tests/cuda_parity.rs` (7/7), `s2s-simt-selftest` (6/6), cuBLASLt/NCCL/interop smoke tests in `s2s-cuda` (4/4).
+> - **Remaining:** self-hosted GPU CI job; an H100 (sm_90) run.
 
 - Build "hello kernels" in both cuTile Rust and cuda-oxide on an H100 and an RTX-class GPU: vector add, a tiled reduction, a fused RMSNorm, an atomic scatter-add. Record:
   - API ergonomics,

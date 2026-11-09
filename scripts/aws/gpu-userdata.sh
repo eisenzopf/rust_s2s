@@ -56,7 +56,7 @@ git log -1 --oneline
 
 section "CUDA toolkit from NVIDIA PyPI wheels"
 python3 -m venv /opt/pyenv && /opt/pyenv/bin/pip install -q --upgrade pip
-PATH="/opt/pyenv/bin:$PATH" scripts/fetch-cuda-wheels.sh /opt/cuda-wheels || upload_and_exit "cuda-wheels-failed"
+PATH="/opt/pyenv/bin:$PATH" S2S_CUDA_RUNTIME_LIBS=1 scripts/fetch-cuda-wheels.sh /opt/cuda-wheels || upload_and_exit "cuda-wheels-failed"
 export CUDA_TOOLKIT_PATH=/opt/cuda-wheels/nvidia/cu13
 export PATH="$CUDA_TOOLKIT_PATH/bin:$PATH"
 # Real driver libcuda comes from the system; the wheel libs supply nvvm etc.
@@ -65,6 +65,7 @@ export LD_LIBRARY_PATH="$CUDA_TOOLKIT_PATH/lib"
 run "CPU tests" cargo test --workspace
 run "cuTile compile to cubin" env S2S_REQUIRE_TILEIRAS=1 cargo test -p s2s-kernels --features cuda --test cuda_compile
 run "cuTile GPU parity (vs CPU reference)" cargo test -p s2s-kernels --features cuda --test cuda_parity -- --ignored --nocapture
+run "s2s-cuda GPU (cuBLASLt, NCCL, cuTile interop)" cargo test -p s2s-cuda --features cuda --test gpu -- --ignored --nocapture
 
 section "cargo-oxide"
 cargo +1.99.1 install --locked --git https://github.com/NVIDIA/cuda-rust --rev "$CUDA_RUST_REV" cargo-oxide \

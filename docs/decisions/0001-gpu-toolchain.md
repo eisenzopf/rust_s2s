@@ -64,7 +64,19 @@ NVIDIA's README recommends Tile for "math over densely packed numerical data" an
 | cuTile kernels (`s2s-kernels --features cuda`) → Tile IR → **cubin** via `tileiras`, for sm_80/89/90/100 | ✅ `tests/cuda_compile.rs` |
 | cuda-oxide: `cargo oxide doctor` / build NVIDIA's `vecadd` example to PTX | ✅ |
 | cuda-oxide kernels (`crates/s2s-simt`) → PTX → **cubin** via `ptxas`, for sm_80/89/90/100 | ✅ `scripts/check-simt.sh` |
-| Any kernel **executed on a GPU** | ❌ not yet — no GPU available |
+| Any kernel **executed on a GPU** | ✅ see below |
+
+### Verified on a GPU (2026-11-09)
+
+Hardware: AWS `g6e.4xlarge`, NVIDIA L40S (sm_89), driver 595.112 (CUDA 13.2), with the CUDA 13.5 wheel toolkit. Cubins from `tileiras` 13.5 load and run on this 13.2 driver.
+
+| Check | Result |
+|---|---|
+| cuTile kernels vs CPU references (`tests/cuda_parity.rs`): vec_add, RMSNorm fwd/bwd, SwiGLU fwd, softmax, cross-entropy, AdamW | ✅ 7/7 |
+| cuda-oxide kernels vs CPU references (`s2s-simt-selftest`): token bitmask, embedding-sum fwd/bwd (atomic scatter-add), delays, row argmax, KV ring write | ✅ 6/6 |
+| `s2s-cuda` (`tests/gpu.rs`): cuBLASLt f32/tf32/bf16 GEMM, single-rank NCCL collectives, cudarc buffer → cuTile with no copy | ✅ 4/4 |
+
+AdamW's first-moment update `β₁·m + (1−β₁)·g` can cancel to far below its terms. There, FMA contraction on the GPU and the reference's f64 `1−β₁` move the result by about one ulp of the *terms*, so its parity check bounds the error by the term magnitude rather than by the result.
 
 ## Decision
 
@@ -91,7 +103,6 @@ NVIDIA's README recommends Tile for "math over densely packed numerical data" an
 
 ## Open items
 
-- Run `tests/cuda_parity.rs` and `s2s-simt-selftest` on a real GPU.
 - Raise the float-atomic lowering with NVIDIA, or use inline PTX `red.global.add.f32`.
 - Add bf16 kernels, then backward kernels, in plan §7.2 priority order.
 - Decide between vendoring `cutile-kernels` and a git dependency.

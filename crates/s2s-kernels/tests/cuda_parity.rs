@@ -33,6 +33,21 @@ fn assert_close(name: &str, gpu: &[f32], cpu: &[f32], rtol: f32, atol: f32) {
     }
 }
 
+/// Like [`assert_close`], but the error is measured against `scale[i]`, the
+/// magnitude of the terms that produced element `i`. Use it where the result
+/// can cancel to far below its inputs (`a*x + b*y`): there FMA contraction
+/// and f32-vs-f64 constants move the result by ~1 ulp of the inputs, which is
+/// arbitrarily many ulp of the result.
+fn assert_close_scaled(name: &str, gpu: &[f32], cpu: &[f32], scale: &[f32], rtol: f32) {
+    assert_eq!(gpu.len(), cpu.len(), "{name}: length");
+    for (i, ((&g, &c), &s)) in gpu.iter().zip(cpu).zip(scale).enumerate() {
+        assert!(
+            (g - c).abs() <= rtol * s,
+            "{name}[{i}]: gpu {g} vs cpu {c} (term scale {s})"
+        );
+    }
+}
+
 #[test]
 #[ignore = "needs an sm_80+ GPU"]
 fn vec_add_matches() {
@@ -172,8 +187,18 @@ fn adamw_matches() {
         let (gp, gm, gv) = ops::adamw_step(&p, &g, &m, &v, 7, &cfg, 0.5, 256).expect("launch");
         let (mut cp, mut cm, mut cv) = (p.clone(), m.clone(), v.clone());
         adamw_step(&mut cp, &g, &mut cm, &mut cv, 7, &cfg, 0.5);
+        // m and v are a*x + b*y sums that can cancel; bound their error by
+        // the size of the terms (8 ulp of f32).
+        let gs: Vec<f32> = g.iter().map(|x| x * 0.5).collect();
+        let (b1, b2) = (cfg.beta1 as f32, cfg.beta2 as f32);
+        let m_scale: Vec<f32> = (0..n)
+            .map(|i| (b1 * m[i]).abs() + ((1.0 - b1) * gs[i]).abs())
+            .collect();
+        let v_scale: Vec<f32> = (0..n)
+            .map(|i| (b2 * v[i]).abs() + (1.0 - b2) * gs[i] * gs[i])
+            .collect();
         assert_close("param", &gp, &cp, 1e-5, 1e-7);
-        assert_close("m", &gm, &cm, 1e-5, 1e-9);
-        assert_close("v", &gv, &cv, 1e-5, 1e-9);
+        assert_close_scaled("m", &gm, &cm, &m_scale, 1e-6);
+        assert_close_scaled("v", &gv, &cv, &v_scale, 1e-6);
     });
 }
