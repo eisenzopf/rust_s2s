@@ -221,9 +221,15 @@ fn bound_numbers(schema: &mut Value, limit: u64) {
 /// them under `properties` (keys the schema doesn't list follow, in their
 /// given order).
 ///
-/// Training data must use this, so the model learns the one serialization
-/// it will be allowed to produce at inference. `parameters` is the tool's
+/// Training data must use this, so the model learns the serialization it
+/// will be allowed to produce at inference. `parameters` is the tool's
 /// parameter schema (`ToolSpec::parameters`), if known.
+///
+/// What the grammar fixes, and this reproduces exactly: key order,
+/// separators, string escaping and integers. What it does not fix: the
+/// spelling of numbers with a fractional part. The grammar admits any valid
+/// JSON number (e.g. `3802084.164470074715`), while this renders serde_json's
+/// shortest round-trip form. Both parse to the same value; train on this one.
 pub fn render_tool_call(
     name: &str,
     arguments: &Value,
@@ -805,12 +811,22 @@ mod tests {
         );
     }
 
+    fn has_fractional_number(v: &Value) -> bool {
+        match v {
+            Value::Number(n) => !(n.is_i64() || n.is_u64()),
+            Value::Array(a) => a.iter().any(has_fractional_number),
+            Value::Object(o) => o.values().any(has_fractional_number),
+            _ => false,
+        }
+    }
+
     #[test]
-    fn sampled_calls_are_exactly_their_canonical_rendering() {
-        // Whatever the constrained sampler produces must equal the canonical
-        // rendering of the parsed call: the grammar admits one serialization,
-        // and `render_tool_call` is it. (Cancel is disabled: with random
-        // logits it would abort most spans at structural positions.)
+    fn sampled_calls_match_their_canonical_rendering() {
+        // Whatever the constrained sampler produces must mean the same as the
+        // canonical rendering of the parsed call, and be the same text except
+        // for the spelling of fractional numbers, which the grammar leaves
+        // free. (Cancel is disabled: with random logits it would abort most
+        // spans at structural positions.)
         let (tok, reg, g) = setup(GrammarConfig {
             allow_cancel: false,
             ..GrammarConfig::default()
@@ -824,6 +840,7 @@ mod tests {
             top_p: None,
         };
         let mut checked = 0;
+        let mut exact = 0;
         for _ in 0..80 {
             let toks = run_span(&g, &mut rng, &params, 400);
             if toks.last() != Some(&ids.tool_call_end) {
@@ -840,13 +857,16 @@ mod tests {
             let v: Value = serde_json::from_str(&text).unwrap();
             let name = v["name"].as_str().unwrap();
             let schema = reg.get(name).map(|t| &t.parameters);
-            assert_eq!(
-                render_tool_call(name, &v["arguments"], schema, &style),
-                text
-            );
+            let rendered = render_tool_call(name, &v["arguments"], schema, &style);
+            assert_eq!(serde_json::from_str::<Value>(&rendered).unwrap(), v);
+            if !has_fractional_number(&v) {
+                assert_eq!(rendered, text);
+                exact += 1;
+            }
             checked += 1;
         }
         assert!(checked >= 60, "only {checked} closed spans");
+        assert!(exact >= 20, "only {exact} spans without fractional numbers");
     }
 
     #[test]
