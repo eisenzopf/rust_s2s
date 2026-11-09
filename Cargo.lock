@@ -821,6 +821,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "s2s-mimi"
+version = "0.1.0"
+dependencies = [
+ "s2s-core",
+ "s2s-kernels",
+ "safetensors",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "s2s-nn"
 version = "0.1.0"
 dependencies = [

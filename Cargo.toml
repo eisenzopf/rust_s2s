@@ -1,8 +1,16 @@
 [workspace]
 resolver = "2"
-members = ["crates/s2s-core", "crates/s2s-kernels", "crates/s2s-nn", "crates/s2s-train"]
+members = [
+    "crates/s2s-core",
+    "crates/s2s-kernels",
+    "crates/s2s-nn",
+    "crates/s2s-train",
+    "crates/s2s-mimi",
+]
 # cuda-oxide crate: own toolchain (Rust 1.99.1), built with `cargo oxide`.
-exclude = ["crates/s2s-simt"]
+# kyutai-ref-mimi: standalone Mimi fixture generator (depends on Kyutai's
+# candle-based `moshi` crate); own workspace and lockfile.
+exclude = ["crates/s2s-simt", "tools/kyutai-ref-mimi"]
 
 [workspace.package]
 version = "0.1.0"
@@ -15,6 +23,7 @@ repository = "https://github.com/eisenzopf/rust_s2s"
 s2s-core = { path = "crates/s2s-core" }
 s2s-kernels = { path = "crates/s2s-kernels" }
 s2s-nn = { path = "crates/s2s-nn" }
+s2s-mimi = { path = "crates/s2s-mimi" }
 safetensors = "0.7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -44,4 +53,6 @@ opt-level = 3
 opt-level = 3
 # Generic layer/kernel code is compiled in the crate that instantiates it.
 [profile.dev.package.s2s-train]
+opt-level = 3
+[profile.dev.package.s2s-mimi]
 opt-level = 3

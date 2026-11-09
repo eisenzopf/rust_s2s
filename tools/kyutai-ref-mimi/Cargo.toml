@@ -1,0 +1,22 @@
+[package]
+name = "kyutai-ref-mimi"
+description = "Generates Mimi parity fixtures with Kyutai's own Rust implementation (moshi crate, candle on CPU)."
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+# Standalone: not part of the main rust_s2s workspace (see root Cargo.toml `exclude`).
+[workspace]
+
+[dependencies]
+# Kyutai's Mimi implementation, pinned to the commit the s2s-mimi port was written against.
+moshi = { git = "https://github.com/kyutai-labs/moshi", rev = "e6a55d2722a65870ef52a6c9f6ecfc0e90f38362" }
+# Pinned to the candle release in Kyutai's Cargo.lock at that commit.
+candle = { version = "=0.9.1", package = "candle-core" }
+candle-nn = "=0.9.1"
+candle-transformers = "=0.9.1"
+anyhow = "1"
+
+[profile.dev.package."*"]
+opt-level = 2
