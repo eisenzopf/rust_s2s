@@ -135,3 +135,62 @@ fn swiglu_fwd_compiles() {
         &[("h", &[1]), ("gate", &[1]), ("up", &[1])],
     );
 }
+
+#[test]
+fn rms_norm_bwd_compiles() {
+    compile(
+        "rms_norm_bwd_f32",
+        &[1024, 256],
+        &[
+            ("x", &[1024, 1]),
+            ("w", &[1]),
+            ("rstd", &[1]),
+            ("dy", &[1024, 1]),
+            ("dx", &[1024, 1]),
+            ("dw_partial", &[1024, 1]),
+        ],
+    );
+}
+
+#[test]
+fn column_sum_compiles() {
+    compile(
+        "column_sum_f32",
+        &[1024, 256],
+        &[("partial", &[1024, 1]), ("out", &[1])],
+    );
+}
+
+#[test]
+fn softmax_compiles() {
+    // Audio heads: 2048 codebook entries per row.
+    compile(
+        "softmax_f32",
+        &[2048, 256],
+        &[("x", &[2048, 1]), ("y", &[2048, 1])],
+    );
+}
+
+#[test]
+fn cross_entropy_compiles() {
+    compile(
+        "cross_entropy_f32",
+        &[2048, 256],
+        &[
+            ("logits", &[2048, 1]),
+            ("targets", &[1]),
+            ("weights", &[1]),
+            ("loss", &[1]),
+            ("dlogits", &[2048, 1]),
+        ],
+    );
+}
+
+#[test]
+fn adamw_compiles() {
+    compile(
+        "adamw_f32",
+        &[256],
+        &[("param", &[1]), ("m", &[1]), ("v", &[1]), ("grad", &[1])],
+    );
+}
