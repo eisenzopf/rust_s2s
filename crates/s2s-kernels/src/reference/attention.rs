@@ -104,7 +104,33 @@ pub fn attention_fwd<T: Float>(
     o: &mut [T],
     lse: &mut [T],
 ) {
+    attention_fwd_segmented(p, None, q, k, v, o, lse);
+}
+
+/// Whether `segments` (`[batch, s]`, by key position) lets query position
+/// `qpos` see key `kpos` in batch row `b`: both must be in the same segment.
+fn same_segment(segments: Option<&[u32]>, s: usize, b: usize, qpos: usize, kpos: usize) -> bool {
+    segments.is_none_or(|sg| sg[b * s + qpos] == sg[b * s + kpos])
+}
+
+/// [`attention_fwd`] with an optional segment mask for packed sequences:
+/// `segments` is `[batch, s]` (one id per key position; query `i` uses the id
+/// at position `i + q_offset`), and a query sees only keys of its own
+/// segment, on top of `p.mask`. With `None` this is exactly
+/// [`attention_fwd`].
+pub fn attention_fwd_segmented<T: Float>(
+    p: &AttnParams,
+    segments: Option<&[u32]>,
+    q: &[T],
+    k: &[T],
+    v: &[T],
+    o: &mut [T],
+    lse: &mut [T],
+) {
     p.check();
+    if let Some(sg) = segments {
+        assert_eq!(sg.len(), p.batch * p.s, "segments must be [batch, s]");
+    }
     let (d, scale) = (p.d, cast::<T>(p.scale));
     assert_eq!(q.len(), p.batch * p.q_heads * p.t * d);
     assert_eq!(k.len(), p.batch * p.kv_heads * p.s * d);
@@ -120,7 +146,8 @@ pub fn attention_fwd<T: Float>(
                 let qpos = i + p.q_offset;
                 let mut m = T::neg_infinity();
                 for j in 0..p.s {
-                    scores[j] = if p.mask.allows(qpos, j) {
+                    scores[j] = if p.mask.allows(qpos, j) && same_segment(segments, p.s, b, qpos, j)
+                    {
                         let kj = &k[p.kv_idx(b, kvh, j)..p.kv_idx(b, kvh, j) + d];
                         scale * dot(qi, kj)
                     } else {
@@ -170,6 +197,23 @@ pub fn attention_bwd<T: Float>(
     dk: &mut [T],
     dv: &mut [T],
 ) {
+    attention_bwd_segmented(p, None, q, k, v, o, lse, d_o, dq, dk, dv);
+}
+
+/// [`attention_bwd`] with the segment mask of [`attention_fwd_segmented`].
+pub fn attention_bwd_segmented<T: Float>(
+    p: &AttnParams,
+    segments: Option<&[u32]>,
+    q: &[T],
+    k: &[T],
+    v: &[T],
+    o: &[T],
+    lse: &[T],
+    d_o: &[T],
+    dq: &mut [T],
+    dk: &mut [T],
+    dv: &mut [T],
+) {
     p.check();
     let (d, scale) = (p.d, cast::<T>(p.scale));
     assert!(dq.len() == q.len() && dk.len() == k.len() && dv.len() == v.len());
@@ -187,7 +231,7 @@ pub fn attention_bwd<T: Float>(
                 let di = dot(doi, &o[qo..qo + d]);
                 let qpos = i + p.q_offset;
                 for j in 0..p.s {
-                    if !p.mask.allows(qpos, j) {
+                    if !p.mask.allows(qpos, j) || !same_segment(segments, p.s, b, qpos, j) {
                         continue;
                     }
                     let ko = p.kv_idx(b, kvh, j);

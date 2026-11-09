@@ -58,6 +58,8 @@ pub enum BlockCtx<T> {
         seq: usize,
         /// Token positions.
         positions: Vec<i64>,
+        /// Segment ids for packed sequences, if any.
+        segments: Option<Vec<u32>>,
     },
 }
 
@@ -91,10 +93,13 @@ impl<T: Float> Block<T> {
         batch: usize,
         seq: usize,
         positions: &[i64],
+        segments: Option<&[u32]>,
     ) -> (Vec<T>, BlockSaved<T>) {
         let rows = batch * seq;
         let (h1, norm1) = self.norm1.forward(x);
-        let (a, attn) = self.attn.forward(&h1, batch, seq, positions);
+        let (a, attn) = self
+            .attn
+            .forward_segmented(&h1, batch, seq, positions, segments);
         let mut x2 = x.to_vec();
         add_assign(&mut x2, &a);
         let (h2, norm2) = self.norm2.forward(&x2);
@@ -121,7 +126,21 @@ impl<T: Float> Block<T> {
         positions: &[i64],
         ckpt: Checkpoint,
     ) -> (Vec<T>, BlockCtx<T>) {
-        let (y, saved) = self.forward_full(x, batch, seq, positions);
+        self.forward_segmented(x, batch, seq, positions, None, ckpt)
+    }
+
+    /// [`forward`](Self::forward) for packed sequences: tokens attend only
+    /// within their segment (`segments`: `[batch * seq]` ids).
+    pub fn forward_segmented(
+        &self,
+        x: &[T],
+        batch: usize,
+        seq: usize,
+        positions: &[i64],
+        segments: Option<&[u32]>,
+        ckpt: Checkpoint,
+    ) -> (Vec<T>, BlockCtx<T>) {
+        let (y, saved) = self.forward_full(x, batch, seq, positions, segments);
         let ctx = match ckpt {
             Checkpoint::Off => BlockCtx::Full(Box::new(saved)),
             Checkpoint::On => BlockCtx::Recompute {
@@ -129,6 +148,7 @@ impl<T: Float> Block<T> {
                 batch,
                 seq,
                 positions: positions.to_vec(),
+                segments: segments.map(<[u32]>::to_vec),
             },
         };
         (y, ctx)
@@ -156,7 +176,11 @@ impl<T: Float> Block<T> {
                 batch,
                 seq,
                 positions,
-            } => self.forward_full(&x, batch, seq, &positions).1,
+                segments,
+            } => {
+                self.forward_full(&x, batch, seq, &positions, segments.as_deref())
+                    .1
+            }
         };
         // y = x2 + mlp(norm2(x2))  =>  dx2 = dy + norm2'(mlp'(dy))
         let dm = self.mlp.backward(saved.mlp, dy);

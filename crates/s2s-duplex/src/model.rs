@@ -26,13 +26,16 @@ pub struct DuplexBatch<T> {
     pub is_injection: Vec<u8>,
     /// `[B, T]` RoPE positions.
     pub positions: Vec<i64>,
+    /// `[B, T]` segment ids for packed windows (several conversations per
+    /// window): attention stays within a segment. `None` = one sequence per
+    /// window.
+    pub segments: Option<Vec<u32>>,
 }
 
 impl<T: Float> DuplexBatch<T> {
-    /// Convert a batch from the `s2s-data` loader.
-    ///
-    /// Use the loader's crop mode (one conversation per window): attention
-    /// does not yet mask across packed segments.
+    /// Convert a batch from the `s2s-data` loader (crop or pack mode; the
+    /// loader's segment ids keep packed conversations from attending to each
+    /// other).
     pub fn from_data(b: &s2s_data::Batch) -> Self {
         Self {
             batch: b.batch_size,
@@ -42,6 +45,7 @@ impl<T: Float> DuplexBatch<T> {
             weights: b.weights.iter().map(|&w| cast(w as f64)).collect(),
             is_injection: b.is_injection.clone(),
             positions: b.positions.iter().map(|&p| p as i64).collect(),
+            segments: Some(b.segment_ids.clone()),
         }
     }
 }
@@ -231,7 +235,14 @@ impl<T: Float> DuplexModel<T> {
         }
         let mut blocks = Vec::with_capacity(self.blocks.len());
         for blk in &self.blocks {
-            let (y, c) = blk.forward(&h, b.batch, b.window, &b.positions, ckpt);
+            let (y, c) = blk.forward_segmented(
+                &h,
+                b.batch,
+                b.window,
+                &b.positions,
+                b.segments.as_deref(),
+                ckpt,
+            );
             h = y;
             blocks.push(c);
         }

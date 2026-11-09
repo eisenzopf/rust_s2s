@@ -87,6 +87,7 @@ pub struct AttentionCtx<T> {
     o: Vec<T>,
     lse: Vec<T>,
     positions: Vec<i64>,
+    segments: Option<Vec<u32>>,
     batch: usize,
     seq: usize,
 }
@@ -159,6 +160,20 @@ impl<T: Float> Attention<T> {
         seq: usize,
         positions: &[i64],
     ) -> (Vec<T>, AttentionCtx<T>) {
+        self.forward_segmented(x, batch, seq, positions, None)
+    }
+
+    /// [`forward`](Self::forward) for packed sequences: `segments`
+    /// (`[batch * seq]`) gives each token's segment id, and tokens attend only
+    /// within their own segment.
+    pub fn forward_segmented(
+        &self,
+        x: &[T],
+        batch: usize,
+        seq: usize,
+        positions: &[i64],
+        segments: Option<&[u32]>,
+    ) -> (Vec<T>, AttentionCtx<T>) {
         let rows = batch * seq;
         let (hq, hkv, hd) = (self.cfg.q_heads, self.cfg.kv_heads, self.cfg.head_dim);
         assert_eq!(positions.len(), rows, "one position per token");
@@ -173,7 +188,7 @@ impl<T: Float> Attention<T> {
         let p = self.params(batch, seq);
         let mut o = vec![T::zero(); q.len()];
         let mut lse = vec![T::zero(); batch * hq * seq];
-        attn::attention_fwd(&p, &q, &k, &v, &mut o, &mut lse);
+        attn::attention_fwd_segmented(&p, segments, &q, &k, &v, &mut o, &mut lse);
         let o_flat = bhtd_to_bthd(&o, batch, hq, seq, hd);
         let (y, wo) = self.wo.forward(&o_flat, rows);
         let ctx = AttentionCtx {
@@ -187,6 +202,7 @@ impl<T: Float> Attention<T> {
             o,
             lse,
             positions: positions.to_vec(),
+            segments: segments.map(<[u32]>::to_vec),
             batch,
             seq,
         };
@@ -236,8 +252,18 @@ impl<T: Float> Attention<T> {
         let mut dk = vec![T::zero(); ctx.k.len()];
         let mut dv = vec![T::zero(); ctx.v.len()];
         let p = self.params(b, t);
-        attn::attention_bwd(
-            &p, &ctx.q, &ctx.k, &ctx.v, &ctx.o, &ctx.lse, &d_o, &mut dq, &mut dk, &mut dv,
+        attn::attention_bwd_segmented(
+            &p,
+            ctx.segments.as_deref(),
+            &ctx.q,
+            &ctx.k,
+            &ctx.v,
+            &ctx.o,
+            &ctx.lse,
+            &d_o,
+            &mut dq,
+            &mut dk,
+            &mut dv,
         );
         let mut dq = bhtd_to_bthd(&dq, b, hq, t, hd);
         let mut dk = bhtd_to_bthd(&dk, b, hkv, t, hd);

@@ -56,6 +56,7 @@ fn random_batch(cfg: &DuplexConfig, b: usize, t: usize, seed: u64) -> DuplexBatc
         weights,
         is_injection,
         positions,
+        segments: None,
     }
 }
 
@@ -174,6 +175,7 @@ fn streaming_reproduces_teacher_forced_logits() {
         weights: vec![1.0; t * k],
         is_injection,
         positions: (0..t as i64).collect(),
+        segments: None,
     };
     let model = DuplexModel::<f64>::new(cfg, &mut SplitMix64::new(10));
     let (_, _, ctx) = model.forward_loss(&batch, Checkpoint::Off);
@@ -251,8 +253,10 @@ fn trains_on_synthetic_tool_dialogues() {
 
     let layout = StreamLayout::default();
     let dataset = std::sync::Arc::new(Dataset::new(vec![ShardReader::open(&path).unwrap()]));
+    // Pack mode: windows hold several conversations; segment ids keep them
+    // from attending to each other.
     let mut lcfg = LoaderConfig::new(AssemblyConfig::new(layout, sp.pad), 2, 96);
-    lcfg.mode = WindowMode::Crop;
+    lcfg.mode = WindowMode::Pack;
     let mut loader = Loader::new(dataset, lcfg).unwrap();
 
     let cfg = DuplexConfig::tiny(layout, tok.vocab_size() as usize, sp.pad);
@@ -282,4 +286,51 @@ fn trains_on_synthetic_tool_dialogues() {
         "loss only fell from {first:.3} to {last:.3}"
     );
     std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn packed_segments_do_not_see_each_other() {
+    // Window = [seq A (3 positions) | seq B (4 positions)]. B's logits must
+    // equal running B alone, and A's must not depend on B.
+    let cfg = small_cfg();
+    let (s, k) = (cfg.layout.num_streams(), cfg.layout.num_generated());
+    let mut r = SplitMix64::new(21);
+    let rows = |n: usize, r: &mut SplitMix64| -> Vec<u32> {
+        (0..n * s)
+            .map(|i| r.below(cfg.stream_vocab(i % s) as u64) as u32)
+            .collect()
+    };
+    let a = rows(3, &mut r);
+    let b = rows(4, &mut r);
+    let model = DuplexModel::<f64>::new(cfg, &mut SplitMix64::new(22));
+    let targets = |n: usize| vec![IGNORE_INDEX; n * k];
+    let packed = DuplexBatch {
+        batch: 1,
+        window: 7,
+        tokens: [a.clone(), b.clone()].concat(),
+        targets: targets(7),
+        weights: vec![1.0; 7 * k],
+        is_injection: vec![0; 7],
+        positions: vec![0, 1, 2, 0, 1, 2, 3],
+        segments: Some(vec![1, 1, 1, 2, 2, 2, 2]),
+    };
+    let alone = DuplexBatch {
+        batch: 1,
+        window: 4,
+        tokens: b,
+        targets: targets(4),
+        weights: vec![1.0; 4 * k],
+        is_injection: vec![0; 4],
+        positions: vec![0, 1, 2, 3],
+        segments: None,
+    };
+    let (_, _, cp) = model.forward_loss(&packed, Checkpoint::Off);
+    let (_, _, ca) = model.forward_loss(&alone, Checkpoint::Off);
+    for j in 0..k {
+        let v = model.heads[j].d_out();
+        let packed_b = &cp.logits(j)[3 * v..7 * v];
+        for (x, y) in packed_b.iter().zip(ca.logits(j)) {
+            assert!((x - y).abs() < 1e-10, "stream {j}: {x} vs {y}");
+        }
+    }
 }

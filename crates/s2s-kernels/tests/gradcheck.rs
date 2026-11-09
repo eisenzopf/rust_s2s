@@ -287,3 +287,75 @@ fn softmax() {
     loss::softmax_bwd(&y, &dy, &mut dx, rows, v);
     assert_close("dx", &dx, &numeric_grad(&x, f));
 }
+
+#[test]
+fn attention_segmented_packed_sequences() {
+    // Two packed segments per row: [1,1,1,2,2,2] and [5,5,7,7,7,7].
+    let p = attention::AttnParams {
+        batch: 2,
+        q_heads: 2,
+        kv_heads: 1,
+        t: 6,
+        s: 6,
+        d: 4,
+        scale: 0.5,
+        q_offset: 0,
+        mask: attention::AttnMask {
+            causal: true,
+            ..Default::default()
+        },
+    };
+    let segs: Vec<u32> = vec![1, 1, 1, 2, 2, 2, 5, 5, 7, 7, 7, 7];
+    let mut r = SplitMix64::new(42);
+    let qn = 2 * 2 * 6 * 4;
+    let kn = 2 * 6 * 4;
+    let q = r.normal_vec(qn, 1.0);
+    let k = r.normal_vec(kn, 1.0);
+    let v = r.normal_vec(kn, 1.0);
+    let d_o = r.normal_vec(qn, 1.0);
+    let f = |q: &[f64], k: &[f64], v: &[f64]| {
+        let (mut o, mut lse) = (vec![0.0; qn], vec![0.0; 24]);
+        attention::attention_fwd_segmented(&p, Some(&segs), q, k, v, &mut o, &mut lse);
+        dot(&o, &d_o)
+    };
+    let (mut o, mut lse) = (vec![0.0; qn], vec![0.0; 24]);
+    attention::attention_fwd_segmented(&p, Some(&segs), &q, &k, &v, &mut o, &mut lse);
+    let (mut dq, mut dk, mut dv) = (vec![0.0; qn], vec![0.0; kn], vec![0.0; kn]);
+    attention::attention_bwd_segmented(
+        &p,
+        Some(&segs),
+        &q,
+        &k,
+        &v,
+        &o,
+        &lse,
+        &d_o,
+        &mut dq,
+        &mut dk,
+        &mut dv,
+    );
+    assert_close("dq", &dq, &numeric_grad(&q, |q| f(q, &k, &v)));
+    assert_close("dk", &dk, &numeric_grad(&k, |k| f(&q, k, &v)));
+    assert_close("dv", &dv, &numeric_grad(&v, |v| f(&q, &k, v)));
+
+    // Isolation: the second segment of row 0 equals running it alone.
+    let sub = attention::AttnParams {
+        batch: 1,
+        t: 3,
+        s: 3,
+        ..p
+    };
+    let take_q = |src: &[f64], h: usize| src[(h * 6 + 3) * 4..(h * 6 + 6) * 4].to_vec();
+    let q2: Vec<f64> = [take_q(&q, 0), take_q(&q, 1)].concat();
+    let k2 = k[3 * 4..6 * 4].to_vec();
+    let v2 = v[3 * 4..6 * 4].to_vec();
+    let (mut o2, mut lse2) = (vec![0.0; 2 * 3 * 4], vec![0.0; 6]);
+    attention::attention_fwd(&sub, &q2, &k2, &v2, &mut o2, &mut lse2);
+    for h in 0..2 {
+        for x in 0..12 {
+            let a = o[(h * 6 + 3) * 4 + x];
+            let b = o2[h * 12 + x];
+            assert!((a - b).abs() < 1e-12, "head {h} elem {x}: {a} vs {b}");
+        }
+    }
+}
