@@ -4,7 +4,7 @@
 //! |---|---|---|
 //! | [`gemm`] | GEMM with transposes, `Linear` fwd/bwd | 1 |
 //! | [`norm`] | RMSNorm fwd/bwd (optional fused residual) | 2 |
-//! | [`layernorm`] | LayerNorm fwd (inference) | 2 |
+//! | [`layernorm`] | LayerNorm fwd (inference; Kyutai LM and Mimi transformers) | 2 |
 //! | [`rope`] | Rotary position embedding fwd/bwd, explicit positions; precomputed f32-angle tables | 3 |
 //! | [`activation`] | SwiGLU fwd/bwd | 4 |
 //! | [`elementwise`] | SiLU / GELU (erf, tanh) / ReLU / sigmoid families, `erf`, gated linear unit fwd (inference) | 4 |
@@ -19,8 +19,7 @@
 //! | [`conv1d`] | Conv1d (stride, dilation, groups), causal padding, weight-norm folding, streaming state | 15 |
 //! | [`conv_transpose1d`] | ConvTranspose1d (stride, groups), causal trim, streaming overlap-add state | 16 |
 //! | [`elu`] | ELU fwd (Mimi SEANet activation) | 15 |
-//! | [`gelu`] | Exact erf-based GELU fwd (Mimi transformer MLP) | — |
-//! | [`layer_norm`] | LayerNorm fwd (Mimi transformers) | — |
+//! | [`gelu`] | Exact erf-based GELU fwd (Mimi transformer MLP; uses `elementwise::erf`) | — |
 
 pub mod activation;
 pub mod attention;
@@ -32,7 +31,6 @@ pub mod elu;
 pub mod embedding;
 pub mod gelu;
 pub mod gemm;
-pub mod layer_norm;
 pub mod layernorm;
 pub mod loss;
 pub mod norm;

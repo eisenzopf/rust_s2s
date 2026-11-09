@@ -5,7 +5,7 @@
 use s2s_kernels::reference::attention::{attention_fwd, AttnMask, AttnParams};
 use s2s_kernels::reference::conv1d::linear_lanes_fwd;
 use s2s_kernels::reference::gelu::gelu_erf_inplace;
-use s2s_kernels::reference::layer_norm::layer_norm_fwd;
+use s2s_kernels::reference::layernorm::layernorm_fwd;
 use s2s_kernels::reference::rope::{rope_fwd, RopeConfig, RopeLayout};
 
 use crate::weights::Loader;
@@ -35,7 +35,7 @@ impl LayerNorm {
     fn forward(&self, x: &[f32], rows: usize) -> Vec<f32> {
         let d = self.w.len();
         let mut y = vec![0.0; x.len()];
-        layer_norm_fwd(x, &self.w, &self.b, LN_EPS, &mut y, rows, d);
+        layernorm_fwd(x, Some(&self.w), Some(&self.b), LN_EPS, &mut y, rows, d);
         y
     }
 }
