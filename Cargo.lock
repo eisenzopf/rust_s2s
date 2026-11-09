@@ -1963,6 +1963,7 @@ dependencies = [
  "s2s-duplex",
  "s2s-kernels",
  "s2s-mimi",
+ "s2s-model",
  "s2s-server",
  "s2s-tools",
  "serde_json",

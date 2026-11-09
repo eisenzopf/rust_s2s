@@ -611,7 +611,7 @@ Compute per tick has to stay under 80 ms at the target batch size to keep up wit
 | M1 Tensor runtime | CPU reference kernels (fwd + bwd); `s2s-nn` layers; `s2s-cuda` cuBLASLt wrapper (compile-checked) | GPU tensor runtime behind the layers; parity on hardware |
 | M2 Attention / KV / sampling | KV-cache streaming step (CPU, = full forward to 1e-10); cuTile attention kernels exist upstream; cuda-oxide argmax + KV ring write | Flash-attention fwd/bwd on GPU; CUDA graphs; roofline numbers |
 | M3 Mimi | `s2s-mimi`: 100% code parity with Kyutai, streaming = offline; `mimi-tokenize` | Real checkpoint (Hugging Face blocked here); real-time speed |
-| M4 Duplex demo, Kyutai weights | `s2s-model::kyutai` (logits within 2.2e-5 of Kyutai); server + engine plumbing | Real Moshi/STT checkpoints; GPU speed |
+| M4 Duplex demo, Kyutai weights | `s2s-model::kyutai` (logits within 2.2e-5 of Kyutai); `KyutaiEngine` serves Moshi / STT through the server (fixture output identical to Kyutai's) | Real Moshi/STT checkpoints; GPU speed |
 | M5 Trainer | Layers with explicit backward, whole-model gradient checks, AdamW/schedules, bit-exact resume | Same loop on GPU kernels |
 | M6 Distributed + data | DDP / ZeRO-1 / sharded checkpoints over `ThreadComm` (= single process); NCCL communicator (compile-checked); `s2s-data` shards/loader | Multi-GPU NCCL run; throughput / MFU |
 | M7 Multistream + DSM | `s2s-duplex` (gradient-checked, streaming = training to 1e-10, packed windows); STT/TTS engine modes; tiny model trains on synthetic dialogues | Real data; training at S scale |
@@ -696,7 +696,7 @@ flowchart LR
 
 ### M4 — Full-duplex S2S demo with existing weights (M) ⭐ *first big de-risking milestone*
 
-> **Status (2026-11-09).** Also done since: Mimi (`s2s-mimi`) and the frame loop / server (`s2s-infer` + `s2s-server`); the engine runs our duplex model, and `MimiCodec` plugs Mimi in. `s2s-model::kyutai`: CPU port of Kyutai's multistream LM (temporal transformer + depformer, KV-cached frame stepping, Moshi driver, DSM STT driver), loading Kyutai's candle checkpoints by name. Matches Kyutai's own `moshi` crate on reduced-size fixtures from `tools/kyutai-ref-lm` (logits within 1e-4, tokens exact); every full-size Kyutai config's tensor names/shapes are accepted. **Remaining:** run real checkpoints (HF download), and an engine adapter for the Kyutai LM (the engine in `s2s-infer` drives our duplex model today).
+> **Status (2026-11-09).** Also done since: Mimi (`s2s-mimi`) and the frame loop / server (`s2s-infer` + `s2s-server`); the engine runs our duplex model, and `MimiCodec` plugs Mimi in. `s2s-model::kyutai`: CPU port of Kyutai's multistream LM (temporal transformer + depformer, KV-cached frame stepping, Moshi driver, DSM STT driver), loading Kyutai's candle checkpoints by name. Matches Kyutai's own `moshi` crate on reduced-size fixtures from `tools/kyutai-ref-lm` (logits within 1e-4, tokens exact); every full-size Kyutai config's tensor names/shapes are accepted. `s2s_infer::KyutaiEngine` serves these checkpoints behind the server's `Engine` trait (Moshi for `s2s` sessions, DSM STT for `stt` sessions, one session at a time); on the fixtures it reproduces Kyutai's recorded text, audio codes and words exactly. **Remaining:** run real checkpoints (HF download) with real Mimi and the SentencePiece tokenizer, at real-time speed (GPU).
 
 - `s2s-model` inference path for the Moshi layout (1 text slot, no `Tu`), loading Kyutai Moshi weights.
 - `s2s-infer` frame loop and `s2s-server` WebSocket + Opus, plus a minimal web client.

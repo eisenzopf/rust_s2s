@@ -24,13 +24,21 @@
 //! The codec is pluggable: [`ToneCodec`] is a deterministic stand-in for
 //! development and tests; [`MimiCodec`] wraps the Mimi codec (`s2s-mimi`) for
 //! real use.
+//!
+//! [`KyutaiEngine`] serves Kyutai's own checkpoints (Moshi for full duplex,
+//! the DSM `stt-*` models for transcription) through the same trait, via the
+//! `s2s-model` port of Kyutai's drivers. Those checkpoints have no tool
+//! calling or text injection; it is the path to a working demo on released
+//! weights (plan milestone M4).
 
 #![forbid(unsafe_code)]
 
 mod codec;
 mod engine;
+mod kyutai;
 pub mod tokenizer;
 
 pub use codec::{FrameCodec, MimiCodec, ToneCodec};
 pub use engine::{DuplexEngine, EngineConfig};
+pub use kyutai::{KyutaiEngine, KyutaiEngineConfig, KyutaiModel};
 pub use tokenizer::Tokenizer;

@@ -76,11 +76,11 @@ struct Ids {
 
 /// Incremental UTF-8 assembly of byte-level tokens.
 #[derive(Debug, Default)]
-struct Utf8Buf(Vec<u8>);
+pub(crate) struct Utf8Buf(Vec<u8>);
 
 impl Utf8Buf {
     /// Append bytes and return whatever is now complete UTF-8.
-    fn push(&mut self, bytes: &[u8]) -> String {
+    pub(crate) fn push(&mut self, bytes: &[u8]) -> String {
         self.0.extend_from_slice(bytes);
         let valid = match std::str::from_utf8(&self.0) {
             Ok(_) => self.0.len(),
@@ -125,12 +125,12 @@ struct Session {
 /// Frames of inactivity before a speaker counts as stopped (~0.5 s).
 const TURN_HANGOVER_FRAMES: u32 = 6;
 /// RMS level above which a user frame counts as speech.
-const USER_SPEECH_RMS: f32 = 0.02;
+pub(crate) const USER_SPEECH_RMS: f32 = 0.02;
 
 /// Started/stopped detection with a hangover: active frames start a turn,
 /// and `TURN_HANGOVER_FRAMES` inactive frames in a row end it.
 #[derive(Debug, Default)]
-struct TurnTracker {
+pub(crate) struct TurnTracker {
     speaking: bool,
     quiet: u32,
 }
@@ -138,7 +138,7 @@ struct TurnTracker {
 impl TurnTracker {
     /// Update with this frame's activity; returns `Some(true)` on a start
     /// and `Some(false)` on a stop.
-    fn update(&mut self, active: bool) -> Option<bool> {
+    pub(crate) fn update(&mut self, active: bool) -> Option<bool> {
         if active {
             self.quiet = 0;
             if !self.speaking {

@@ -200,6 +200,12 @@ impl AsrState {
         &self.lm
     }
 
+    /// Give the model back (its KV cache still holds this stream; call
+    /// [`LmModel::reset_state`] before reusing it).
+    pub fn into_model(self) -> LmModel {
+        self.lm
+    }
+
     /// Feed one frame of Mimi codes (one per codebook the model reads).
     pub fn step_tokens(&mut self, codes: &[u32]) -> Result<Vec<AsrMsg>> {
         let n = self.lm.in_audio_codebooks();
