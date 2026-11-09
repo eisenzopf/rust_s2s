@@ -8,6 +8,8 @@ members = [
     "crates/s2s-tools",
     "crates/s2s-data",
     "crates/s2s-server",
+    "crates/s2s-tokenizer",
+    "crates/s2s-eval",
 ]
 # cuda-oxide crate: own toolchain (Rust 1.99.1), built with `cargo oxide`.
 exclude = ["crates/s2s-simt"]
@@ -25,6 +27,8 @@ s2s-core = { path = "crates/s2s-core" }
 s2s-kernels = { path = "crates/s2s-kernels", default-features = false }
 s2s-nn = { path = "crates/s2s-nn" }
 s2s-tools = { path = "crates/s2s-tools" }
+s2s-data = { path = "crates/s2s-data" }
+s2s-tokenizer = { path = "crates/s2s-tokenizer" }
 safetensors = "0.7"
 num-traits = "0.2"
 # Data pipeline (s2s-data).
@@ -34,6 +38,13 @@ serde_json = "1"
 crc32fast = "1.4"
 clap = { version = "4.5", features = ["derive"] }
 tempfile = "3"
+# Text tokenizer (s2s-tokenizer). No default features: `onig` and
+# `esaxx_fast` compile C/C++ code and `progressbar` is for interactive
+# training; `fancy-regex` is the pure-Rust backend for pre-tokenizer regexes.
+tokenizers = { version = "0.22.2", default-features = false, features = ["fancy-regex"] }
+# Evaluation (s2s-eval): FFT for log-mel distances, WAV I/O for the CLI.
+rustfft = "6.4"
+hound = "3.5"
 # NVIDIA CUDA Rust (github.com/NVIDIA/cuda-rust, formerly NVlabs/cutile-rs and
 # NVlabs/cuda-oxide). Every CUDA Rust crate comes from this one pinned
 # revision: mixing a crates.io copy with a git copy yields two incompatible

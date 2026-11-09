@@ -1,0 +1,21 @@
+[package]
+name = "s2s-tokenizer"
+description = "Text tokenizer for rust_s2s: a model-agnostic wrapper around Hugging Face `tokenizers` (tokenizer.json) that appends the stream special tokens, fixes the encoding conventions of the text streams, and implements the tokenizer traits of s2s-tools (grammar masks) and s2s-data (training data)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+s2s-core.workspace = true
+s2s-tools.workspace = true
+s2s-data.workspace = true
+tokenizers.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+s2s-kernels.workspace = true
+
+[lints]
+workspace = true
