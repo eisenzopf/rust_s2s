@@ -1,0 +1,27 @@
+[package]
+name = "s2s-data"
+description = "Training-data pipeline for rust_s2s: memory-mapped shard format, training-example assembly (delays, injection segments, targets, loss weights), deterministic resumable loader, synthetic tool-dialogue timeline assembly."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "s2s-data"
+path = "src/bin/s2s-data.rs"
+
+[dependencies]
+s2s-core.workspace = true
+s2s-kernels.workspace = true
+memmap2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+crc32fast.workspace = true
+clap.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
