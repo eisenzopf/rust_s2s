@@ -28,3 +28,6 @@ rustc-ice-*.txt
 
 # Claude Code agent worktrees (local only)
 .claude/worktrees/
+
+# Python bytecode (scripts/*.py)
+__pycache__/
